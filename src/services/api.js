@@ -142,11 +142,12 @@ export const stationsApi = {
 };
 
 export const trainsApi = {
-  getAll:  (params)   => client.get('/trains', { params }),
-  getById: (id)       => client.get(`/trains/${id}`),
-  create:  (data)     => client.post('/trains', data),
-  update:  (id, data) => client.put(`/trains/${id}`, data),
-  delete:  (id)       => client.delete(`/trains/${id}`),
+  getAll:          (params)      => client.get('/trains', { params }),
+  getById:         (id)          => client.get(`/trains/${id}`),
+  create:          (data)        => client.post('/trains', data),
+  update:          (id, data)    => client.put(`/trains/${id}`, data),
+  delete:          (id)          => client.delete(`/trains/${id}`),
+  searchByStation: (code, date)  => client.get('/trains/search-by-station', { params: { station_code: code, journey_date: date } }),
 };
 
 export const usersApi = {

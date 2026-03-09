@@ -818,7 +818,8 @@ export default function SearchPage() {
   const [paying, setPaying]           = useState(false);
   const [showLogin, setShowLogin]     = useState(false);
   const [connecting, setConnecting]   = useState(null); // null | []
-  const [searchTab, setSearchTab]     = useState('direct'); // 'direct' | 'connecting'
+  const [viaTrains, setViaTrains]     = useState(null); // null | [] — trains passing through a station
+  const [searchTab, setSearchTab]     = useState('direct'); // 'direct' | 'connecting' | 'via'
 
   const fetchSt = useCallback(() => stationsApi.getAll(), []);
   const { data: stData } = useApi(fetchSt);
@@ -833,12 +834,14 @@ export default function SearchPage() {
     if (form.from === form.to)                { addToast('From and To cannot be the same.', 'warning'); return; }
     if (form.date < todayStr)                 { addToast('Cannot search for past dates.', 'warning'); return; }
     setLoading(true); setResults(null); setStep(null); setSelectedTrain(null);
-    setConnecting(null); setSearchTab('direct');
+    setConnecting(null); setViaTrains(null); setSearchTab('direct');
     try {
       // ── 1. Direct trains — strict origin→destination match ──────────────────
-      const [directRes, connRes] = await Promise.allSettled([
+      const [directRes, connRes, viaFromRes, viaToRes] = await Promise.allSettled([
         trainsApi.getAll({ source: form.from, destination: form.to, journey_date: form.date }),
         connectingTrainsApi.search(form.from, form.to, form.date),
+        trainsApi.searchByStation(form.from, form.date),
+        trainsApi.searchByStation(form.to, form.date),
       ]);
 
       // Direct trains — only trains whose From_Station == source AND To_Station == destination
@@ -858,6 +861,36 @@ export default function SearchPage() {
 
       setResults(directFiltered);
 
+      // Via station trains — trains that PASS THROUGH from or to station
+      // Merge both sets, deduplicate by train ID, exclude trains already in direct results
+      const directIds = new Set(directFiltered.map(t => String(t.ID || '')));
+      const viaFromList = viaFromRes.status === 'fulfilled'
+        ? (viaFromRes.value?.data?.trains || []) : [];
+      const viaToList   = viaToRes.status === 'fulfilled'
+        ? (viaToRes.value?.data?.trains   || []) : [];
+
+      // Build map: train ID → { train, via_from_stop, via_to_stop }
+      const viaMap = {};
+      viaFromList.forEach(t => {
+        const id = String(t.ID || '');
+        if (!directIds.has(id)) {
+          viaMap[id] = { ...t, via_from: t.stop_info, via_to: null };
+        }
+      });
+      viaToList.forEach(t => {
+        const id = String(t.ID || '');
+        if (!directIds.has(id)) {
+          if (viaMap[id]) {
+            viaMap[id].via_to = t.stop_info;
+          } else {
+            viaMap[id] = { ...t, via_from: null, via_to: t.stop_info };
+          }
+        }
+      });
+      // Only keep trains that pass through BOTH stations (the actual route)
+      const viaFinal = Object.values(viaMap).filter(t => t.via_from && t.via_to);
+      setViaTrains(viaFinal);
+
       // Connecting trains
       if (connRes.status === 'fulfilled') {
         const connData = connRes.value?.data?.connecting || connRes.value?.connecting || [];
@@ -865,6 +898,9 @@ export default function SearchPage() {
         if (directFiltered.length === 0 && connData.length > 0) {
           setSearchTab('connecting');
           addToast(`No direct trains. Found ${connData.length} connecting option(s).`, 'info');
+        } else if (directFiltered.length === 0 && viaFinal.length > 0) {
+          setSearchTab('via');
+          addToast(`No direct trains. Found ${viaFinal.length} train(s) passing through your stations.`, 'info');
         } else if (directFiltered.length === 0) {
           addToast('No trains found for this route and date.', 'info');
         }
@@ -937,7 +973,7 @@ export default function SearchPage() {
   const resetAll = () => {
     setStep(null); setSelectedTrain(null);
     setBookingData(null); setBooking(null); setShowLogin(false);
-    setConnecting(null); setSearchTab('direct');
+    setConnecting(null); setViaTrains(null); setSearchTab('direct');
   };
 
   const lS = { ...labelBase };
@@ -1080,6 +1116,7 @@ export default function SearchPage() {
             {[
               { id:'direct',     label:`Direct Trains (${(results||[]).length})`,         icon:'🚆' },
               { id:'connecting', label:`Connecting (${(connecting||[]).length})`,          icon:'🔗' },
+              { id:'via',        label:`Via Station (${(viaTrains||[]).length})`,          icon:'📍' },
             ].map(tab => {
               const active = searchTab === tab.id;
               return (
@@ -1150,7 +1187,6 @@ export default function SearchPage() {
                   const mins = conn.transfer_mins || conn.transfer_minutes || '—';
                   return (
                     <div key={i} style={{ background:'var(--bg-elevated)', border:'1px solid var(--border)', borderRadius:10, marginBottom:12, overflow:'hidden' }}>
-                      {/* Via badge */}
                       <div style={{ padding:'8px 16px', background:'rgba(139,92,246,0.1)', borderBottom:'1px solid #2d1f52', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                         <span style={{ fontSize:12, fontWeight:700, color:'#a78bfa', fontFamily:FONT }}>
                           🔗 Via {via}
@@ -1162,7 +1198,6 @@ export default function SearchPage() {
                         )}
                       </div>
                       <div style={{ padding:'14px 16px', display:'grid', gridTemplateColumns:'1fr auto 1fr', gap:12, alignItems:'center' }}>
-                        {/* Leg 1 */}
                         <div style={{ background:'#080b11', borderRadius:8, padding:12, border:'1px solid #1e2433' }}>
                           <div style={{ fontSize:11, fontWeight:700, color:'#3b82f6', textTransform:'uppercase', marginBottom:6, fontFamily:FONT }}>Leg 1</div>
                           <div style={{ fontSize:13, fontWeight:600, color:'var(--text-primary)', fontFamily:FONT }}>{leg1.Train_Name || leg1.name || '—'}</div>
@@ -1170,9 +1205,7 @@ export default function SearchPage() {
                             {leg1.Train_Number || leg1.number || '—'} · {extractTime(leg1.Departure_Time)} → {extractTime(leg1.Arrival_Time)}
                           </div>
                         </div>
-                        {/* Arrow */}
                         <div style={{ textAlign:'center', color:'#6b7280', fontSize:20 }}>→</div>
-                        {/* Leg 2 */}
                         <div style={{ background:'#080b11', borderRadius:8, padding:12, border:'1px solid #1e2433' }}>
                           <div style={{ fontSize:11, fontWeight:700, color:'#22c55e', textTransform:'uppercase', marginBottom:6, fontFamily:FONT }}>Leg 2</div>
                           <div style={{ fontSize:13, fontWeight:600, color:'var(--text-primary)', fontFamily:FONT }}>{leg2.Train_Name || leg2.name || '—'}</div>
@@ -1189,6 +1222,104 @@ export default function SearchPage() {
                         <button onClick={() => handleBookClick(leg2)}
                           style={{ padding:'7px 14px', borderRadius:7, border:'none', background:'rgba(37,99,235,0.3)', color:'#93c5fd', fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:FONT }}>
                           Book Leg 2
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          )}
+
+          {/* ── Via Station Tab ── */}
+          {searchTab === 'via' && (
+            (viaTrains||[]).length === 0 ? (
+              <Card>
+                <div style={{ textAlign:'center', padding:'36px 24px' }}>
+                  <div style={{ fontSize:32, marginBottom:10 }}>📍</div>
+                  <div style={{ fontSize:14, fontWeight:600, color:'#6b7280', fontFamily:FONT }}>No trains passing through both stations</div>
+                  <div style={{ fontSize:12, color:'#4b5563', marginTop:4, fontFamily:FONT }}>
+                    Add sub-stations to trains via Admin → Train Routes to see trains passing through intermediate stops.
+                  </div>
+                </div>
+              </Card>
+            ) : (
+              <div>
+                <div style={{ marginBottom:14, fontSize:14, fontWeight:600, color:'var(--text-primary)', fontFamily:FONT }}>
+                  {viaTrains.length} train{viaTrains.length !== 1 ? 's' : ''} pass through <span style={{ color:'#f59e0b' }}>{form.from}</span> and <span style={{ color:'#f59e0b' }}>{form.to}</span>
+                </div>
+                {viaTrains.map((train, i) => {
+                  const fromStop = train.via_from || {};
+                  const toStop   = train.via_to   || {};
+                  return (
+                    <div key={train.ID || i}
+                      style={{ background:'var(--bg-elevated)', border:'1px solid var(--border)',
+                               borderRadius:10, marginBottom:12, overflow:'hidden' }}>
+                      {/* Header */}
+                      <div style={{ padding:'8px 16px', background:'rgba(245,158,11,0.08)',
+                                    borderBottom:'1px solid rgba(245,158,11,0.15)',
+                                    display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                        <span style={{ fontSize:12, fontWeight:700, color:'#f59e0b', fontFamily:FONT }}>
+                          📍 Passes through your stations
+                        </span>
+                        <span style={{ fontSize:11, fontFamily:'monospace', color:'#6b7280' }}>
+                          {train.Train_Number}
+                        </span>
+                      </div>
+
+                      <div style={{ padding:'14px 16px' }}>
+                        <div style={{ fontSize:15, fontWeight:700, color:'var(--text-primary)', fontFamily:FONT, marginBottom:10 }}>
+                          {train.Train_Name}
+                          <span style={{ marginLeft:10, fontSize:11, fontWeight:500, color:'#6b7280' }}>
+                            {train.Train_Type}
+                          </span>
+                        </div>
+
+                        {/* Stop info for from → to */}
+                        <div style={{ display:'grid', gridTemplateColumns:'1fr auto 1fr', gap:12, alignItems:'center' }}>
+                          {/* FROM stop */}
+                          <div style={{ background:'#080b11', borderRadius:8, padding:12, border:'1px solid #1e2433' }}>
+                            <div style={{ fontSize:10, fontWeight:700, color:'#3b82f6', textTransform:'uppercase', marginBottom:5, fontFamily:FONT }}>
+                              Passes {form.from}
+                            </div>
+                            <div style={{ fontSize:16, fontWeight:700, fontFamily:'monospace', color:'#f3f4f6' }}>
+                              {fromStop.departure_time || fromStop.arrival_time || '—'}
+                            </div>
+                            <div style={{ fontSize:10, color:'#6b7280', marginTop:3, fontFamily:FONT }}>
+                              Seq {fromStop.sequence || '—'}
+                              {fromStop.distance_km ? ` · ${fromStop.distance_km}km` : ''}
+                            </div>
+                          </div>
+
+                          <div style={{ textAlign:'center', color:'#f59e0b', fontSize:22 }}>→</div>
+
+                          {/* TO stop */}
+                          <div style={{ background:'#080b11', borderRadius:8, padding:12, border:'1px solid #1e2433' }}>
+                            <div style={{ fontSize:10, fontWeight:700, color:'#22c55e', textTransform:'uppercase', marginBottom:5, fontFamily:FONT }}>
+                              Arrives {form.to}
+                            </div>
+                            <div style={{ fontSize:16, fontWeight:700, fontFamily:'monospace', color:'#f3f4f6' }}>
+                              {toStop.arrival_time || toStop.departure_time || '—'}
+                            </div>
+                            <div style={{ fontSize:10, color:'#6b7280', marginTop:3, fontFamily:FONT }}>
+                              Seq {toStop.sequence || '—'}
+                              {toStop.distance_km ? ` · ${toStop.distance_km}km` : ''}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Full route hint */}
+                        <div style={{ marginTop:10, fontSize:11, color:'#4b5563', fontFamily:FONT }}>
+                          Full route: {train.From_Station?.display_value || ''} → {train.To_Station?.display_value || ''}
+                        </div>
+                      </div>
+
+                      <div style={{ padding:'8px 16px', borderTop:'1px solid #1e2433', display:'flex', justifyContent:'flex-end' }}>
+                        <button onClick={() => handleBookClick(train)}
+                          style={{ padding:'7px 18px', borderRadius:7, border:'none',
+                                   background:'#2563eb', color:'#fff',
+                                   fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:FONT }}>
+                          Book This Train
                         </button>
                       </div>
                     </div>

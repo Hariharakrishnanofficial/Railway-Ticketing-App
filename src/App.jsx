@@ -35,18 +35,18 @@ export default function App() {
         <Layout user={user} onLogin={handleLogin} onLogout={handleLogout}>
           <Routes>
             {/* ── Public routes ── */}
-            <Route path="/"               element={<SearchPage />} />
+            <Route path="/"               element={<OverviewPage />} />
             <Route path="/trains"         element={<TrainsPage />} />
             <Route path="/stations"       element={<StationsPage />} />
             <Route path="/users"          element={<UsersPage />} />
             <Route path="/settings"       element={<SettingsPage />} />
             <Route path="/fares"          element={<FaresPage />} />
-            {/* <Route path="/search"         element={<SearchPage />} /> */}
+            <Route path="/search"         element={<SearchPage />} />
             <Route path="/pnr-status"     element={<PNRStatus />} />
             <Route path="/train-schedule" element={<TrainSchedule />} />
             <Route path="/chart-vacancy"  element={<ChartVacancy />} />
-            <Route path="/overview"  element={<OverviewPage />} />
-            <Route path="/train-routes" element={<TrainRoutesPage />} />
+            <Route path="/overview"       element={<OverviewPage />} />
+            <Route path="/train-routes"   element={<TrainRoutesPage />} />
             
 
             {/* ── Protected routes (require login) ── */}
