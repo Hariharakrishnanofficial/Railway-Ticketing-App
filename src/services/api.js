@@ -2,7 +2,7 @@ import axios from 'axios';
 
 // baseURL already includes /api — so all paths below must NOT repeat /api
 // Final URL = baseURL + path  →  http://127.0.0.1:4600/api/stations  ✓
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:4600/api';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://railway-ticketing-system-50039510865.development.catalystappsail.in/api';
 
 const client = axios.create({
   baseURL: BASE_URL,
