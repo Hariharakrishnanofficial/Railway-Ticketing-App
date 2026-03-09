@@ -47,6 +47,7 @@ export default function App() {
             <Route path="/chart-vacancy"  element={<ChartVacancy />} />
             <Route path="/overview"  element={<OverviewPage />} />
             <Route path="/train-routes" element={<TrainRoutesPage />} />
+            
 
             {/* ── Protected routes (require login) ── */}
             <Route path="/bookings"       element={<RequireAuth onLogin={handleLogin}><BookingsPage /></RequireAuth>} />
