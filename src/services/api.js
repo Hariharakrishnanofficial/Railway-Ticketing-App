@@ -1,8 +1,37 @@
 import axios from 'axios';
 
-// baseURL already includes /api — so all paths below must NOT repeat /api
-// Final URL = baseURL + path  →  http://127.0.0.1:4600/api/stations  ✓
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://railway-ticketing-system-50039510865.development.catalystappsail.in/api';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3002/api/';
+
+// ─── Role helpers ─────────────────────────────────────────────────────────────
+
+/** Read the logged-in user from session storage. */
+export function getCurrentUser() {
+  try { return JSON.parse(sessionStorage.getItem('rail_user')); }
+  catch { return null; }
+}
+
+/**
+ * Returns true if the current session user is an admin.
+ * admin@admin.com is ALWAYS admin regardless of Role field.
+ */
+export function isAdmin(user) {
+  if (!user) user = getCurrentUser();
+  if (!user) return false;
+  if (user.Email === 'admin@admin.com') return true;
+  return (user.Role || '').toLowerCase() === 'admin';
+}
+
+/** Build auth headers for admin-protected API calls. */
+function adminHeaders() {
+  const user = getCurrentUser();
+  if (!user) return {};
+  return {
+    'X-User-Email': user.Email || '',
+    'X-User-Role':  user.Role  || '',
+  };
+}
+
+// ─── Axios client ─────────────────────────────────────────────────────────────
 
 const client = axios.create({
   baseURL: BASE_URL,
@@ -13,15 +42,21 @@ const client = axios.create({
 client.interceptors.response.use(
   (res) => res.data,
   (err) => {
+    // Auth routes: return the error JSON body as a resolved value so callers
+    // can read res.success / res.error without a try/catch throw.
+    const url = err.config?.url || '';
+    if (url.includes('/auth/') && err.response?.data) {
+      return Promise.resolve(err.response.data);
+    }
     const msg = err.response?.data?.error || err.response?.data?.message || err.message || 'Network error';
-    const e = new Error(msg);
-    e.status = err.response?.status;
-    e.body   = err.response?.data;
+    const e   = new Error(msg);
+    e.status  = err.response?.status;
+    e.body    = err.response?.data;
     return Promise.reject(e);
   }
 );
 
-// ─── Response helpers ────────────────────────────────────────────────────────
+// ─── Response helpers ─────────────────────────────────────────────────────────
 
 /**
  * Zoho response shape: { success: true, data: { code: 3000, data: [...] }, status_code: 200 }
@@ -90,16 +125,16 @@ export function displayZohoDate(dateStr) {
   } catch { return '—'; }
 }
 
-
 export function extractTime(dateStr) {
   if (!dateStr) return '--:--';
   const str = String(dateStr).trim();
-  if (/^\d{2}:\d{2}/.test(str)) return str.slice(0, 5);         // already "HH:MM"
-  if (str.includes('T')) return str.split('T')[1]?.slice(0, 5) || '--:--'; // ISO
+  if (/^\d{2}:\d{2}/.test(str)) return str.slice(0, 5);
+  if (str.includes('T')) return str.split('T')[1]?.slice(0, 5) || '--:--';
   const space = str.indexOf(' ');
-  if (space !== -1) return str.slice(space + 1, space + 6);     // "DD-MMM-YYYY HH:MM:SS"
+  if (space !== -1) return str.slice(space + 1, space + 6);
   return '--:--';
 }
+
 /** "YYYY-MM-DDTHH:MM" → "DD-MMM-YYYY HH:MM:SS"  (to send to Zoho API) */
 export function toZohoDateTime(isoStr) {
   if (!isoStr) return null;
@@ -130,82 +165,89 @@ export function displayZohoDateTime(dateStr) {
 }
 
 // ─── API services ─────────────────────────────────────────────────────────────
-// All paths are relative to baseURL (which already ends in /api)
-// e.g. client.get('/stations') → GET http://127.0.0.1:4600/api/stations  ✓
+// Paths are relative to BASE_URL (already ends in /api)
 
+// Stations — admin protected writes
 export const stationsApi = {
   getAll:  (params)   => client.get('/stations', { params }),
   getById: (id)       => client.get(`/stations/${id}`),
-  create:  (data)     => client.post('/stations', data),
-  update:  (id, data) => client.put(`/stations/${id}`, data),
-  delete:  (id)       => client.delete(`/stations/${id}`),
+  create:  (data)     => client.post('/stations', data, { headers: adminHeaders() }),
+  update:  (id, data) => client.put(`/stations/${id}`, data, { headers: adminHeaders() }),
+  delete:  (id)       => client.delete(`/stations/${id}`, { headers: adminHeaders() }),
 };
 
+// Trains — admin protected writes
 export const trainsApi = {
-  getAll:          (params)      => client.get('/trains', { params }),
-  getById:         (id)          => client.get(`/trains/${id}`),
-  create:          (data)        => client.post('/trains', data),
-  update:          (id, data)    => client.put(`/trains/${id}`, data),
-  delete:          (id)          => client.delete(`/trains/${id}`),
-  searchByStation: (code, date)  => client.get('/trains/search-by-station', { params: { station_code: code, journey_date: date } }),
+  getAll:          (params)     => client.get('/trains', { params }),
+  getById:         (id)         => client.get(`/trains/${id}`),
+  create:          (data)       => client.post('/trains', data, { headers: adminHeaders() }),
+  update:          (id, data)   => client.put(`/trains/${id}`, data, { headers: adminHeaders() }),
+  delete:          (id)         => client.delete(`/trains/${id}`, { headers: adminHeaders() }),
+  searchByStation: (code, date) => client.get('/trains/search-by-station', { params: { station_code: code, journey_date: date } }),
 };
 
+// Users — admin protected writes
 export const usersApi = {
-  getAll:  (params)   => client.get('/users', { params }),
+  getAll:  (params)   => client.get('/users', { params, headers: adminHeaders() }),
   getById: (id)       => client.get(`/users/${id}`),
-  create:  (data)     => client.post('/users', data),
-  update:  (id, data) => client.put(`/users/${id}`, data),
-  delete:  (id)       => client.delete(`/users/${id}`),
+  create:  (data)     => client.post('/users', data, { headers: adminHeaders() }),
+  update:  (id, data) => client.put(`/users/${id}`, data, { headers: adminHeaders() }),
+  delete:  (id)       => client.delete(`/users/${id}`, { headers: adminHeaders() }),
 };
 
+// Bookings — mixed: passengers create/cancel own; admin sees all
 export const bookingsApi = {
-  getAll:   (params)        => client.get('/bookings', { params }),
+  getAll:   (params)        => client.get('/bookings', { params, headers: adminHeaders() }),
   getById:  (id)            => client.get(`/bookings/${id}`),
   create:   (data)          => client.post('/bookings', data),
   update:   (id, data)      => client.put(`/bookings/${id}`, data),
-  delete:   (id)            => client.delete(`/bookings/${id}`),
-  confirm:  (id)            => client.post(`/bookings/${id}/confirm`),
-  markPaid: (id)            => client.post(`/bookings/${id}/paid`),
+  delete:   (id)            => client.delete(`/bookings/${id}`, { headers: adminHeaders() }),
+  confirm:  (id)            => client.post(`/bookings/${id}/confirm`, {}, { headers: adminHeaders() }),
+  markPaid: (id)            => client.post(`/bookings/${id}/paid`, {}, { headers: adminHeaders() }),
   cancel:   (id, data = {}) => client.post(`/bookings/${id}/cancel`, data),
 };
 
+// Settings — admin only
 export const settingsApi = {
-  getAll:   (params)   => client.get('/settings', { params }),
-  getById:  (id)       => client.get(`/settings/${id}`),
-  create:   (data)     => client.post('/settings', data),
-  update:   (id, data) => client.put(`/settings/${id}`, data),
-  delete:   (id)       => client.delete(`/settings/${id}`),
+  getAll:  (params)   => client.get('/settings', { params }),
+  getById: (id)       => client.get(`/settings/${id}`),
+  create:  (data)     => client.post('/settings', data, { headers: adminHeaders() }),
+  update:  (id, data) => client.put(`/settings/${id}`, data, { headers: adminHeaders() }),
+  delete:  (id)       => client.delete(`/settings/${id}`, { headers: adminHeaders() }),
 };
 
+// Auth — public
 export const authApi = {
-  login:    (data) => client.post('/auth/login', data),
-  register: (data) => client.post('/auth/register', data),
+  login:       (data) => client.post('/auth/login', data),
+  register:    (data) => client.post('/auth/register', data),
+  setupAdmin:  (data) => client.post('/auth/setup-admin', data),
 };
 
+// Fares — admin protected writes
 export const faresApi = {
   getAll:    (params)   => client.get('/fares', { params }),
   getById:   (id)       => client.get(`/fares/${id}`),
-  create:    (data)     => client.post('/fares', data),
-  update:    (id, data) => client.put(`/fares/${id}`, data),
-  delete:    (id)       => client.delete(`/fares/${id}`),
+  create:    (data)     => client.post('/fares', data, { headers: adminHeaders() }),
+  update:    (id, data) => client.put(`/fares/${id}`, data, { headers: adminHeaders() }),
+  delete:    (id)       => client.delete(`/fares/${id}`, { headers: adminHeaders() }),
   calculate: (data)     => client.post('/fares/calculate', data),
 };
 
-// ── User-centric booking endpoints
+// User-centric booking endpoints — passenger use
 export const userBookingsApi = {
   getByUser:   (userId, params) => client.get(`/users/${userId}/bookings`, { params }),
   getUpcoming: (userId)         => client.get(`/users/${userId}/bookings`, { params: { upcoming: true } }),
 };
 
-// ── Train info extras
+// Train info extras — public
 export const trainInfoApi = {
   schedule: (id)       => client.get(`/trains/${id}/schedule`),
   vacancy:  (id, date) => client.get(`/trains/${id}/vacancy`, { params: { date } }),
 };
 
-// ── Overview stats
+// Overview stats — admin only
 export const overviewApi = {
-  stats: () => client.get('/overview/stats'),
+  stats: () => client.get('/overview/stats', { headers: adminHeaders() }),
 };
 
 export const systemApi = {
@@ -214,20 +256,64 @@ export const systemApi = {
   testToken: () => client.get('/test/token'),
 };
 
-// ── Connecting trains search
+// Connecting trains search — public
 export const connectingTrainsApi = {
   search: (from, to, date) =>
-    client.get("/trains/connecting", { params: { from, to, date } }),
+    client.get('/trains/connecting', { params: { from, to, date } }),
 };
 
-// ── Train Routes (intermediate stops)
+// ── Train Routes — subform-based architecture ──────────────────────────────────
+//
+// DATABASE DESIGN (Zoho Creator):
+//   Form: Train_Routes         — one record per TRAIN (parent)
+//     Field: Train             — Lookup → Trains form
+//     Field: Notes             — Text
+//     Subform: Route_Stops     — list of intermediate stops
+//       Field: Sequence        — Number (stop order; 1=origin, last=destination)
+//       Field: Station_Name    — Text
+//       Field: Station_Code    — Text (IRCTC code e.g. MAS, NDLS, SBC)
+//       Field: Stations        — Lookup → Stations form (optional)
+//       Field: Arrival_Time    — Time
+//       Field: Departure_Time  — Time
+//       Field: Halt_Minutes    — Number
+//       Field: Distance_KM     — Decimal
+//       Field: Day_Count       — Number (1 for same-day, 2 for next day, etc.)
+//   Report: All_Train_Routes   — report over Train_Routes form
+//
+// API ENDPOINTS:
+//   GET    /api/train-routes               → all route records (summary)
+//   GET    /api/train-routes?train_id=X    → route record + stops for train X
+//   POST   /api/train-routes               → create route record (with optional stops[])
+//   GET    /api/train-routes/:id           → single route + stops
+//   PUT    /api/train-routes/:id           → update route-level fields
+//   DELETE /api/train-routes/:id           → delete entire route
+//
+//   GET    /api/train-routes/:id/stops          → list stops
+//   POST   /api/train-routes/:id/stops          → add a stop (subform insert)
+//   PUT    /api/train-routes/:id/stops/:stopId  → update a stop (subform update)
+//   DELETE /api/train-routes/:id/stops/:stopId  → delete a stop (subform delete)
+//
+//   GET    /api/train-routes/connections?station_code=MAS → trains at station
+//   GET    /api/train-routes/connections/all               → full connection map
+//
 export const trainRoutesApi = {
-  getAll:       (params)        => client.get("/train-routes", { params }),
-  getByTrain:   (trainId)       => client.get("/train-routes", { params: { train_id: trainId } }),
+  // Route record (parent) CRUD
+  getAll:       (params)        => client.get('/train-routes', { params }),
+  getByTrain:   (trainId)       => client.get('/train-routes', { params: { train_id: trainId } }),
   getById:      (id)            => client.get(`/train-routes/${id}`),
-  create:       (data)          => client.post("/train-routes", data),
-  update:       (id, data)      => client.put(`/train-routes/${id}`, data),
-  delete:       (id)            => client.delete(`/train-routes/${id}`),
+  create:       (data)          => client.post('/train-routes', data, { headers: adminHeaders() }),
+  update:       (id, data)      => client.put(`/train-routes/${id}`, data, { headers: adminHeaders() }),
+  delete:       (id)            => client.delete(`/train-routes/${id}`, { headers: adminHeaders() }),
+
+  // Subform stop CRUD (scoped to a route record)
+  getStops:     (routeId)              => client.get(`/train-routes/${routeId}/stops`),
+  addStop:      (routeId, data)        => client.post(`/train-routes/${routeId}/stops`, data, { headers: adminHeaders() }),
+  updateStop:   (routeId, stopId, data)=> client.put(`/train-routes/${routeId}/stops/${stopId}`, data, { headers: adminHeaders() }),
+  deleteStop:   (routeId, stopId)      => client.delete(`/train-routes/${routeId}/stops/${stopId}`, { headers: adminHeaders() }),
+
+  // Connection queries
+  connections:    (stationCode) => client.get('/train-routes/connections', { params: { station_code: stationCode } }),
+  allConnections: ()            => client.get('/train-routes/connections/all'),
 };
 
 export default client;
