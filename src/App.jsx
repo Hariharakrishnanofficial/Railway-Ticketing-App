@@ -38,7 +38,8 @@ import PassengerHome   from './pages/PassengerHome';
 // Admin access is granted to:
 //   1. Any email ending with @admin.com  (admin@admin.com, test@admin.com, etc.)
 //   2. Any user whose Role field === 'Admin'
-export function isAdmin(user) {
+export function isAdmin(user) 
+{
   if (!user) return false;
   const email = (user.Email || '').trim().toLowerCase();
   if (email.endsWith('@admin.com')) return true;
