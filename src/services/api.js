@@ -13,7 +13,7 @@ import axios from 'axios';
 //
 // DO NOT use window.location.origin as a fallback — in local dev that resolves
 // to http://localhost:<vite-port>/api/ which is the frontend, not the backend.
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3002/api/';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://railway-ticketing-system-50039510865.development.catalystappsail.in/api/';
 
 // ─── Role helpers ─────────────────────────────────────────────────────────────
 
