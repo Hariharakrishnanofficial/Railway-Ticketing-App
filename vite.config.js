@@ -11,7 +11,7 @@ export default defineConfig({
       // This means axios can use baseURL = '/api/' in local dev — no CORS,
       // no port mismatch, no hardcoded backend URL needed in the browser.
       '/api': {
-        target: 'https://railway-ticketing-system-50039510865.development.catalystappsail.in',
+        target: 'https://railway-ticketing-system-50039510865.development.catalystappsail.in/api/',
         changeOrigin: true,
         secure: true,
       }

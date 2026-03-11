@@ -50,16 +50,19 @@ export default function SignInModal({ onClose, onLogin }) {
     try {
       if (tab === 'login') {
         const res = await authApi.login({ Email: form.Email, Password: form.Password });
+        console.log('Login response:', res);
         if (res?.success === false) throw new Error(res.error || 'Login failed');
         const userData = res?.user ?? res?.data?.data ?? res?.data ?? res;
         sessionStorage.setItem('rail_user', JSON.stringify(userData));
         addToast(`Welcome back, ${userData.Full_Name || 'User'}!`, 'success');
         onLogin?.(userData);
+        console.log('Login response:', res);
         onClose?.();
       } else {
         const res = await authApi.register({
           Full_Name: form.Full_Name, Email: form.Email, Password: form.Password,
         });
+        console.log('Registration response:', res);
         if (res?.success === false) throw new Error(res.error || 'Registration failed');
         addToast('Account created! Please sign in.', 'success');
         setTab('login');
