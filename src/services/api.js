@@ -8,7 +8,7 @@ import axios from 'axios';
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ||
   (typeof window !== 'undefined'
     ? `${window.location.origin}/api/`
-    : 'http://localhost:9000/api/');
+    : 'https://railway-ticketing-system-50039510865.development.catalystappsail.in/api/');
 
 // ─── Role helpers ─────────────────────────────────────────────────────────────
 
@@ -35,7 +35,7 @@ function adminHeaders() {
   if (!user) return {};
   return {
     'X-User-Email': user.Email || '',
-    'X-User-Role':  user.Role  || '',
+    'X-User-Role': user.Role || '',
   };
 }
 
@@ -67,9 +67,9 @@ client.interceptors.response.use(
       errBody?.message?.message ||
       err.message ||
       'Network error';
-    const e   = new Error(msg);
-    e.status  = err.response?.status;
-    e.body    = errBody;
+    const e = new Error(msg);
+    e.status = err.response?.status;
+    e.body = errBody;
     return Promise.reject(e);
   }
 );
@@ -83,8 +83,8 @@ client.interceptors.response.use(
 export function extractRecords(apiResponse) {
   if (!apiResponse) return [];
   if (Array.isArray(apiResponse?.data?.data)) return apiResponse.data.data;
-  if (Array.isArray(apiResponse?.data))       return apiResponse.data;
-  if (Array.isArray(apiResponse))             return apiResponse;
+  if (Array.isArray(apiResponse?.data)) return apiResponse.data;
+  if (Array.isArray(apiResponse)) return apiResponse;
   return [];
 }
 
@@ -102,8 +102,8 @@ export function getLookupLabel(field) {
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
-const MONTHS_NUM = { Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12 };
-const MONTHS_STR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MONTHS_NUM = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12 };
+const MONTHS_STR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /** "DD-MMM-YYYY HH:MM:SS" → "YYYY-MM-DDTHH:MM"  (for datetime-local inputs) */
 export function parseZohoDate(dateStr) {
@@ -115,7 +115,7 @@ export function parseZohoDate(dateStr) {
     const mm = MONTHS_NUM[mmm];
     if (!mm) return '';
     const [hh, mi] = timePart.split(':');
-    return `${yyyy}-${String(mm).padStart(2,'0')}-${String(dd).padStart(2,'0')}T${hh.padStart(2,'0')}:${mi.padStart(2,'0')}`;
+    return `${yyyy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}T${hh.padStart(2, '0')}:${mi.padStart(2, '0')}`;
   } catch { return ''; }
 }
 
@@ -128,7 +128,7 @@ export function parseZohoDateOnly(dateStr) {
     const [dd, mmm, yyyy] = datePart.split('-');
     const mm = MONTHS_NUM[mmm];
     if (!mm) return '';
-    return `${yyyy}-${String(mm).padStart(2,'0')}-${String(dd).padStart(2,'0')}`;
+    return `${yyyy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
   } catch { return ''; }
 }
 
@@ -139,7 +139,7 @@ export function displayZohoDate(dateStr) {
   if (/^\d{2}-[A-Za-z]{3}-\d{4}/.test(str)) return str.split(' ')[0];
   try {
     const [yyyy, mm, dd] = str.slice(0, 10).split('-');
-    return `${String(dd).padStart(2,'0')}-${MONTHS_STR[parseInt(mm,10)-1]}-${yyyy}`;
+    return `${String(dd).padStart(2, '0')}-${MONTHS_STR[parseInt(mm, 10) - 1]}-${yyyy}`;
   } catch { return '—'; }
 }
 
@@ -162,7 +162,7 @@ export function toZohoDateTime(isoStr) {
     const monthName = MONTHS_STR[parseInt(mm, 10) - 1];
     if (!monthName) return null;
     const [hh, mi] = timePart.split(':');
-    return `${String(dd).padStart(2,'0')}-${monthName}-${yyyy} ${hh.padStart(2,'0')}:${mi.padStart(2,'0')}:00`;
+    return `${String(dd).padStart(2, '0')}-${monthName}-${yyyy} ${hh.padStart(2, '0')}:${mi.padStart(2, '0')}:00`;
   } catch { return null; }
 }
 
@@ -178,7 +178,7 @@ export function displayZohoDateTime(dateStr) {
     if (!isoVal) return '—';
     const [datePart, timePart = ''] = isoVal.split('T');
     const [yyyy, mm, dd] = datePart.split('-');
-    return `${String(dd).padStart(2,'0')}-${MONTHS_STR[parseInt(mm,10)-1]}-${yyyy}${timePart ? ' ' + timePart : ''}`;
+    return `${String(dd).padStart(2, '0')}-${MONTHS_STR[parseInt(mm, 10) - 1]}-${yyyy}${timePart ? ' ' + timePart : ''}`;
   } catch { return '—'; }
 }
 
@@ -187,80 +187,80 @@ export function displayZohoDateTime(dateStr) {
 
 // Stations — admin protected writes
 export const stationsApi = {
-  getAll:  (params)   => client.get('/stations', { params }),
-  getById: (id)       => client.get(`/stations/${id}`),
-  create:  (data)     => client.post('/stations', data, { headers: adminHeaders() }),
-  update:  (id, data) => client.put(`/stations/${id}`, data, { headers: adminHeaders() }),
-  delete:  (id)       => client.delete(`/stations/${id}`, { headers: adminHeaders() }),
+  getAll: (params) => client.get('/stations', { params }),
+  getById: (id) => client.get(`/stations/${id}`),
+  create: (data) => client.post('/stations', data, { headers: adminHeaders() }),
+  update: (id, data) => client.put(`/stations/${id}`, data, { headers: adminHeaders() }),
+  delete: (id) => client.delete(`/stations/${id}`, { headers: adminHeaders() }),
 };
 
 // Trains — admin protected writes
 export const trainsApi = {
-  getAll:          (params)     => client.get('/trains', { params }),
-  getById:         (id)         => client.get(`/trains/${id}`),
-  create:          (data)       => client.post('/trains', data, { headers: adminHeaders() }),
-  update:          (id, data)   => client.put(`/trains/${id}`, data, { headers: adminHeaders() }),
-  delete:          (id)         => client.delete(`/trains/${id}`, { headers: adminHeaders() }),
+  getAll: (params) => client.get('/trains', { params }),
+  getById: (id) => client.get(`/trains/${id}`),
+  create: (data) => client.post('/trains', data, { headers: adminHeaders() }),
+  update: (id, data) => client.put(`/trains/${id}`, data, { headers: adminHeaders() }),
+  delete: (id) => client.delete(`/trains/${id}`, { headers: adminHeaders() }),
   searchByStation: (code, date) => client.get('/trains/search-by-station', { params: { station_code: code, journey_date: date } }),
 };
 
 // Users — admin protected writes
 export const usersApi = {
-  getAll:  (params)   => client.get('/users', { params, headers: adminHeaders() }),
-  getById: (id)       => client.get(`/users/${id}`),
-  create:  (data)     => client.post('/users', data, { headers: adminHeaders() }),
-  update:  (id, data) => client.put(`/users/${id}`, data, { headers: adminHeaders() }),
-  delete:  (id)       => client.delete(`/users/${id}`, { headers: adminHeaders() }),
+  getAll: (params) => client.get('/users', { params, headers: adminHeaders() }),
+  getById: (id) => client.get(`/users/${id}`),
+  create: (data) => client.post('/users', data, { headers: adminHeaders() }),
+  update: (id, data) => client.put(`/users/${id}`, data, { headers: adminHeaders() }),
+  delete: (id) => client.delete(`/users/${id}`, { headers: adminHeaders() }),
 };
 
 // Bookings — mixed: passengers create/cancel own; admin sees all
 export const bookingsApi = {
-  getAll:   (params)        => client.get('/bookings', { params, headers: adminHeaders() }),
-  getById:  (id)            => client.get(`/bookings/${id}`),
-  create:   (data)          => client.post('/bookings', data),
-  update:   (id, data)      => client.put(`/bookings/${id}`, data),
-  delete:   (id)            => client.delete(`/bookings/${id}`, { headers: adminHeaders() }),
-  confirm:  (id)            => client.post(`/bookings/${id}/confirm`, {}, { headers: adminHeaders() }),
-  markPaid: (id)            => client.post(`/bookings/${id}/paid`, {}, { headers: adminHeaders() }),
-  cancel:   (id, data = {}) => client.post(`/bookings/${id}/cancel`, data),
+  getAll: (params) => client.get('/bookings', { params, headers: adminHeaders() }),
+  getById: (id) => client.get(`/bookings/${id}`),
+  create: (data) => client.post('/bookings', data),
+  update: (id, data) => client.put(`/bookings/${id}`, data),
+  delete: (id) => client.delete(`/bookings/${id}`, { headers: adminHeaders() }),
+  confirm: (id) => client.post(`/bookings/${id}/confirm`, {}, { headers: adminHeaders() }),
+  markPaid: (id) => client.post(`/bookings/${id}/paid`, {}, { headers: adminHeaders() }),
+  cancel: (id, data = {}) => client.post(`/bookings/${id}/cancel`, data),
 };
 
 // Settings — admin only
 export const settingsApi = {
-  getAll:  (params)   => client.get('/settings', { params }),
-  getById: (id)       => client.get(`/settings/${id}`),
-  create:  (data)     => client.post('/settings', data, { headers: adminHeaders() }),
-  update:  (id, data) => client.put(`/settings/${id}`, data, { headers: adminHeaders() }),
-  delete:  (id)       => client.delete(`/settings/${id}`, { headers: adminHeaders() }),
+  getAll: (params) => client.get('/settings', { params }),
+  getById: (id) => client.get(`/settings/${id}`),
+  create: (data) => client.post('/settings', data, { headers: adminHeaders() }),
+  update: (id, data) => client.put(`/settings/${id}`, data, { headers: adminHeaders() }),
+  delete: (id) => client.delete(`/settings/${id}`, { headers: adminHeaders() }),
 };
 
 // Auth — public
 export const authApi = {
-  login:       (data) => client.post('/auth/login', data),
-  register:    (data) => client.post('/auth/register', data),
-  setupAdmin:  (data) => client.post('/auth/setup-admin', data),
+  login: (data) => client.post('/auth/login', data),
+  register: (data) => client.post('/auth/register', data),
+  setupAdmin: (data) => client.post('/auth/setup-admin', data),
 };
 
 // Fares — admin protected writes
 export const faresApi = {
-  getAll:    (params)   => client.get('/fares', { params }),
-  getById:   (id)       => client.get(`/fares/${id}`),
-  create:    (data)     => client.post('/fares', data, { headers: adminHeaders() }),
-  update:    (id, data) => client.put(`/fares/${id}`, data, { headers: adminHeaders() }),
-  delete:    (id)       => client.delete(`/fares/${id}`, { headers: adminHeaders() }),
-  calculate: (data)     => client.post('/fares/calculate', data),
+  getAll: (params) => client.get('/fares', { params }),
+  getById: (id) => client.get(`/fares/${id}`),
+  create: (data) => client.post('/fares', data, { headers: adminHeaders() }),
+  update: (id, data) => client.put(`/fares/${id}`, data, { headers: adminHeaders() }),
+  delete: (id) => client.delete(`/fares/${id}`, { headers: adminHeaders() }),
+  calculate: (data) => client.post('/fares/calculate', data),
 };
 
 // User-centric booking endpoints — passenger use
 export const userBookingsApi = {
-  getByUser:   (userId, params) => client.get(`/users/${userId}/bookings`, { params }),
-  getUpcoming: (userId)         => client.get(`/users/${userId}/bookings`, { params: { upcoming: true } }),
+  getByUser: (userId, params) => client.get(`/users/${userId}/bookings`, { params }),
+  getUpcoming: (userId) => client.get(`/users/${userId}/bookings`, { params: { upcoming: true } }),
 };
 
 // Train info extras — public
 export const trainInfoApi = {
-  schedule: (id)       => client.get(`/trains/${id}/schedule`),
-  vacancy:  (id, date) => client.get(`/trains/${id}/vacancy`, { params: { date } }),
+  schedule: (id) => client.get(`/trains/${id}/schedule`),
+  vacancy: (id, date) => client.get(`/trains/${id}/vacancy`, { params: { date } }),
 };
 
 // Overview stats — admin only
@@ -269,8 +269,8 @@ export const overviewApi = {
 };
 
 export const systemApi = {
-  health:    () => client.get('/health'),
-  debug:     () => client.get('/debug/config'),
+  health: () => client.get('/health'),
+  debug: () => client.get('/debug/config'),
   testToken: () => client.get('/test/token'),
 };
 
@@ -316,42 +316,42 @@ export const connectingTrainsApi = {
 //
 export const trainRoutesApi = {
   // Route record (parent) CRUD
-  getAll:       (params)        => client.get('/train-routes', { params }),
-  getByTrain:   (trainId)       => client.get('/train-routes', { params: { train_id: trainId } }),
-  getById:      (id)            => client.get(`/train-routes/${id}`),
-  create:       (data)          => client.post('/train-routes', data, { headers: adminHeaders() }),
-  update:       (id, data)      => client.put(`/train-routes/${id}`, data, { headers: adminHeaders() }),
-  delete:       (id)            => client.delete(`/train-routes/${id}`, { headers: adminHeaders() }),
+  getAll: (params) => client.get('/train-routes', { params }),
+  getByTrain: (trainId) => client.get('/train-routes', { params: { train_id: trainId } }),
+  getById: (id) => client.get(`/train-routes/${id}`),
+  create: (data) => client.post('/train-routes', data, { headers: adminHeaders() }),
+  update: (id, data) => client.put(`/train-routes/${id}`, data, { headers: adminHeaders() }),
+  delete: (id) => client.delete(`/train-routes/${id}`, { headers: adminHeaders() }),
 
   // Subform stop CRUD (scoped to a route record)
-  getStops:     (routeId)              => {
+  getStops: (routeId) => {
     if (!routeId || routeId === 'null' || routeId === 'undefined')
       return Promise.reject(new Error('Invalid route ID - cannot fetch stops'));
     return client.get(`/train-routes/${routeId}/stops`);
   },
-  addStop:      (routeId, data)        => {
+  addStop: (routeId, data) => {
     if (!routeId || routeId === 'null' || routeId === 'undefined')
       return Promise.reject(new Error('Invalid route ID - route record may not exist or not be fully loaded'));
     return client.post(`/train-routes/${routeId}/stops`, data, { headers: adminHeaders() });
   },
-  updateStop:   (routeId, stopId, data)=> {
+  updateStop: (routeId, stopId, data) => {
     if (!routeId || routeId === 'null' || routeId === 'undefined')
       return Promise.reject(new Error('Invalid route ID'));
     if (!stopId || stopId === 'null' || stopId === 'undefined')
       return Promise.reject(new Error('Invalid stop ID'));
     return client.put(`/train-routes/${routeId}/stops/${stopId}`, data, { headers: adminHeaders() });
   },
-  deleteStop:   (routeId, stopId)      => {
+  deleteStop: (routeId, stopId) => {
     if (!routeId || routeId === 'null' || routeId === 'undefined')
       return Promise.reject(new Error('Invalid route ID'));
-    if (!stopId || stopId === 'null' || stopId === 'undefined')  
+    if (!stopId || stopId === 'null' || stopId === 'undefined')
       return Promise.reject(new Error('Invalid stop ID'));
     return client.delete(`/train-routes/${routeId}/stops/${stopId}`, { headers: adminHeaders() });
   },
 
   // Connection queries
-  connections:    (stationCode) => client.get('/train-routes/connections', { params: { station_code: stationCode } }),
-  allConnections: ()            => client.get('/train-routes/connections/all'),
+  connections: (stationCode) => client.get('/train-routes/connections', { params: { station_code: stationCode } }),
+  allConnections: () => client.get('/train-routes/connections/all'),
 };
 
 export default client;
