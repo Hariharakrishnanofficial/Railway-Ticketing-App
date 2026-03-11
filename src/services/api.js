@@ -1,6 +1,14 @@
 import axios from 'axios';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://railway-ticketing-system-50039510865.development.catalystappsail.in/api/';
+// Resolve base URL:
+// 1. Use VITE_API_BASE_URL env var if set at build time (explicit config)
+// 2. Otherwise derive from current page origin so the app works on any host
+//    (same-origin, Catalyst, etc.) without a hardcoded localhost fallback
+//    that would cause net::ERR_FAILED on HTTPS deployments (mixed content).
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ||
+  (typeof window !== 'undefined'
+    ? `${window.location.origin}/api/`
+    : 'http://localhost:9000/api/');
 
 // ─── Role helpers ─────────────────────────────────────────────────────────────
 
