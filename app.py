@@ -23,6 +23,218 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== Configuration ====================
+
+def to_zoho_date_only(date_str):
+    """Convert 'YYYY-MM-DD' or 'DD-MMM-YYYY HH:MM:SS' → 'DD-MMM-YYYY' for Zoho date fields."""
+    if not date_str:
+        return None
+    MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+    s = str(date_str).strip()
+    # Already "DD-MMM-YYYY ..." format
+    if len(s) >= 11 and s[2] == '-' and s[6] == '-':
+        return s.split(' ')[0]
+    # "YYYY-MM-DD" format
+    if len(s) >= 10 and s[4] == '-' and s[7] == '-':
+        try:
+            yyyy, mm, dd = s[:10].split('-')
+            return f"{dd.zfill(2)}-{MONTHS[int(mm)-1]}-{yyyy}"
+        except Exception:
+            pass
+    return s
+
+
+# ==================== SEAT ALLOCATION HELPERS ====================
+
+# Maps booking Class field → Available_Seats_* field on Trains form
+SEAT_CLASS_MAP = {
+    'SL': 'Available_Seats_SL',
+    '2S': 'Available_Seats_SL',   # shares SL pool
+    '3A': 'Available_Seats_3A',
+    '3AC': 'Available_Seats_3A',
+    '2A': 'Available_Seats_2A',
+    '2AC': 'Available_Seats_2A',
+    '1A': 'Available_Seats_1A',
+    '1AC': 'Available_Seats_1A',
+    'CC': 'Available_Seats_CC',
+    'EC': 'Available_Seats_CC',   # shares CC pool
+    'FC': 'Available_Seats_1A',   # shares 1A pool
+}
+
+# Berth cycling order per class for auto-assignment
+BERTH_CYCLE = {
+    'SL':  ['Lower', 'Middle', 'Upper', 'Side Lower', 'Side Upper'],
+    '3A':  ['Lower', 'Middle', 'Upper', 'Side Lower', 'Side Upper'],
+    '2A':  ['Lower', 'Upper', 'Side Lower', 'Side Upper'],
+    '1A':  ['Lower', 'Upper'],
+    'CC':  ['Window', 'Aisle', 'Middle'],
+    'EC':  ['Window', 'Aisle'],
+    'FC':  ['Lower', 'Upper'],
+}
+
+# Coach prefix per class
+COACH_PREFIX = {
+    'SL': 'S', '2S': 'S',
+    '3A': 'B', '3AC': 'B',
+    '2A': 'A', '2AC': 'A',
+    '1A': 'H', '1AC': 'H',
+    'CC': 'C', 'EC': 'EC',
+    'FC': 'FC',
+}
+
+# Seats per coach per class
+COACH_CAPACITY = {
+    'SL': 72, '2S': 100,
+    '3A': 64, '3AC': 64,
+    '2A': 46, '2AC': 46,
+    '1A': 18, '1AC': 18,
+    'CC': 78, 'EC': 56,
+    'FC': 18,
+}
+
+def get_available_seats(train_id, cls):
+    """
+    Returns current Available_Seats for given class from Zoho.
+    Falls back to computing from Total_Seats - confirmed_bookings if field missing.
+    """
+    train_res = zoho.get_record_by_id(zoho.forms['reports']['trains'], train_id)
+    if not train_res.get('success'):
+        return None, None  # (available, train_record)
+    rec = train_res.get('data', {}).get('data', train_res.get('data', {}))
+    
+    avail_field = SEAT_CLASS_MAP.get(cls.upper(), 'Available_Seats_SL')
+    available = rec.get(avail_field)
+
+    # Zoho returns "" for unset number fields — treat "" as None
+    if available is None or str(available).strip() == "":
+        available = None
+
+    # If Available_Seats field not set, compute from Total_Seats - confirmed_bookings
+    if available is None:
+        total_field = avail_field.replace('Available_', 'Total_')
+        total_raw = rec.get(total_field)
+        total = int(float(str(total_raw))) if total_raw not in (None, "") else 0
+
+        # Count confirmed bookings for this class
+        criteria = f'(Trains == "{train_id}") && (Booking_Status == "confirmed") && (Class == "{cls}")'
+        bk_res = zoho.get_all_records(zoho.forms['reports']['bookings'], criteria=criteria, limit=1000)
+        bookings = bk_res.get('data', {}).get('data', []) if bk_res.get('success') else []
+        booked = sum(int(b.get('Passenger_Count') or 1) for b in bookings)
+        available = max(0, total - booked)
+
+    # Safe cast — Zoho may return numeric string "300" or float "300.0"
+    try:
+        available = int(float(str(available)))
+    except (ValueError, TypeError):
+        available = 0
+
+    return available, rec
+
+def decrement_seats(train_id, cls, count, train_rec):
+    """
+    Subtract `count` from Available_Seats_* for the given class.
+    Called after a confirmed booking is created.
+    """
+    avail_field = SEAT_CLASS_MAP.get(cls.upper(), 'Available_Seats_SL')
+    _raw = train_rec.get(avail_field)
+    current = int(float(str(_raw))) if _raw not in (None, "", " ") else 0
+    new_val = max(0, current - count)
+    
+    result = zoho.update_record(
+        zoho.forms['reports']['trains'],
+        train_id,
+        {avail_field: new_val}
+    )
+    logger.info(f"Seat decrement: train={train_id} class={cls} {current}→{new_val} result={result.get('success')}")
+    return new_val
+
+def restore_seats(train_id, cls, count):
+    """
+    Add `count` back to Available_Seats_* for the given class.
+    Called when a booking is cancelled.
+    """
+    train_res = zoho.get_record_by_id(zoho.forms['reports']['trains'], train_id)
+    if not train_res.get('success'):
+        logger.warning(f"restore_seats: train {train_id} not found")
+        return
+    rec = train_res.get('data', {}).get('data', train_res.get('data', {}))
+    
+    avail_field = SEAT_CLASS_MAP.get(cls.upper(), 'Available_Seats_SL')
+    total_field = avail_field.replace('Available_', 'Total_')
+    _avail_raw = rec.get(avail_field)
+    _total_raw = rec.get(total_field)
+    current = int(float(str(_avail_raw))) if _avail_raw not in (None, "", " ") else 0
+    total   = int(float(str(_total_raw))) if _total_raw not in (None, "", " ") else 9999
+    new_val = min(total, current + count)
+    
+    zoho.update_record(
+        zoho.forms['reports']['trains'],
+        train_id,
+        {avail_field: new_val}
+    )
+    logger.info(f"Seat restore: train={train_id} class={cls} {current}→{new_val}")
+
+def assign_seat_numbers(train_id, cls, journey_date, passengers, train_rec):
+    """
+    Auto-assigns seat/berth numbers to each passenger.
+    Finds the last used seat number from existing confirmed bookings,
+    then assigns the next ones sequentially with berth cycling.
+    Returns list of seat strings e.g. ["S1/23/Lower", "S1/24/Middle"]
+    """
+    cls_upper = cls.upper()
+    prefix    = COACH_PREFIX.get(cls_upper, 'S')
+    cap       = COACH_CAPACITY.get(cls_upper, 72)
+    berths    = BERTH_CYCLE.get(cls_upper, ['Lower', 'Middle', 'Upper'])
+    
+    # Find highest seat number already booked on this train/class/date
+    criteria = (
+        f'(Trains == "{train_id}") && '
+        f'(Class == "{cls}") && '
+        f'(Booking_Status == "confirmed")'
+    )
+    bk_res   = zoho.get_all_records(zoho.forms['reports']['bookings'], criteria=criteria, limit=1000)
+    bookings = bk_res.get('data', {}).get('data', []) if bk_res.get('success') else []
+    
+    # Filter by journey date
+    def _date_match(b):
+        jd = str(b.get('Journey_Date', ''))
+        try:
+            if len(jd.split('-')[0]) == 4:
+                return jd[:10] == journey_date
+            return datetime.strptime(jd.split(' ')[0], '%d-%b-%Y').strftime('%Y-%m-%d') == journey_date
+        except Exception:
+            return False
+    
+    date_bookings = [b for b in bookings if _date_match(b)]
+    
+    # Parse highest seat number already used
+    max_seat = 0
+    for b in date_bookings:
+        seat_str = b.get('Seat_Numbers', '') or ''
+        for part in str(seat_str).split(','):
+            part = part.strip()
+            # Format: "S1/23/Lower" — extract the number
+            nums = re.findall(r'/(\d+)/', part)
+            if nums:
+                max_seat = max(max_seat, int(nums[0]))
+    
+    # Assign seats to each new passenger
+    assigned = []
+    for i, pax in enumerate(passengers):
+        seat_num   = max_seat + i + 1
+        coach_num  = ((seat_num - 1) // cap) + 1
+        seat_in_coach = ((seat_num - 1) % cap) + 1
+        
+        # Honour preference if given, else cycle
+        pref = pax.get('berthPref', 'No Preference')
+        if pref and pref != 'No Preference' and pref in berths:
+            berth = pref
+        else:
+            berth = berths[(seat_num - 1) % len(berths)]
+        
+        coach_label = f"{prefix}{coach_num}"
+        assigned.append(f"{coach_label}/{seat_in_coach}/{berth}")
+    
+    return assigned
 def format_zoho_date(date_str):
     """
     Convert date from 'DD-MMM-YYYY HH:MM:SS' to 'YYYY-MM-DD HH:MM:SS'
@@ -66,13 +278,14 @@ def get_form_config():
             'settings':     os.getenv('ZOHO_FORM_SETTINGS',     'Settings'),
             'fares':        os.getenv('ZOHO_FORM_FARES',        'Fares'),
             'train_routes': os.getenv('ZOHO_FORM_TRAIN_ROUTES', 'Train_Routes'),
+            
         },
         'reports': {
             'stations':     os.getenv('ZOHO_REPORT_STATIONS',     'All_Stations'),
             'trains':       os.getenv('ZOHO_REPORT_TRAINS',       'All_Trains'),
             'users':        os.getenv('ZOHO_REPORT_USERS',        'All_Users'),
             'bookings':     os.getenv('ZOHO_REPORT_BOOKINGS',     'All_Bookings'),
-            'settings':     os.getenv('ZOHO_REPORT_SETTINGS',     'All_Settings'),
+            'settings':     os.getenv('ZOHO_REPORT_SETTINGS',     'All_Setting'),
             'fares':        os.getenv('ZOHO_REPORT_FARES',        'All_Fares'),
             'train_routes': os.getenv('ZOHO_REPORT_TRAIN_ROUTES', 'All_Train_Routes'),
         }
@@ -276,21 +489,12 @@ class ZohoService:
     # ------------------------------------------------
 
     def get_all_records(self, report_name, criteria=None, limit=200):
-
         try:
             url = self._get_url("report", report_name)
-
-            params = {"limit": limit}
-
+            params = {"max_records": min(limit, 1000)}   # ← fix here
             if criteria:
                 params["criteria"] = criteria
-
-            return self._request(
-                "GET",
-                url,
-                params=params
-            )
-
+            return self._request("GET", url, params=params)
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -313,19 +517,21 @@ class ZohoService:
     # ------------------------------------------------
 
     def update_record(self, report_name, record_id, data):
-
+        """
+        PATCH a specific record by ID.
+        Zoho Creator API v2 format (per official docs):
+          { "data": { ...fields... } }
+        
+        For subform rows, data should be:
+          { "Route_Stops": [ { "ID": "stop_id", "Halt_Minutes": 5 } ] }
+          — no ID = new insert, with ID = update row, with _delete=None = delete row
+        """
         try:
             url = self._get_url("report", report_name, record_id)
 
-            payload = {
-                "data": data
-            }
+            payload = {"data": data}
 
-            return self._request(
-                "PATCH",
-                url,
-                json=payload
-            )
+            return self._request("PATCH", url, json=payload)
 
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -423,6 +629,7 @@ def validate_required(data, fields):
         return False, ["No data provided"]
     missing = [f for f in fields if f not in data or data[f] is None or data[f] == ""]
     return len(missing) == 0, missing
+
 
 # ==================== Routes ====================
 
@@ -654,32 +861,70 @@ def create_train():
     
 
 
-
 @app.route('/api/trains', methods=['GET'])
 def get_trains():
     limit        = request.args.get('limit', 200, type=int)
-    source       = request.args.get('source')        # From station code, e.g. "MAS"
-    destination  = request.args.get('destination')   # To station code, e.g. "NDLS"
-    journey_date = request.args.get('journey_date')  # "DD-MMM-YYYY" e.g. "10-Mar-2026"
+    source       = request.args.get('source', '').strip().upper()
+    destination  = request.args.get('destination', '').strip().upper()
+    journey_date = request.args.get('journey_date')  # "YYYY-MM-DD"
 
-    criteria_parts = []
-
-    # From_Station / To_Station are lookup fields — filter via linked Station_Code subfield
-    if source:
-        criteria_parts.append(f'(From_Station.Station_Code == "{source}")')
-
-    if destination:
-        criteria_parts.append(f'(To_Station.Station_Code == "{destination}")')
-
-    criteria = ' && '.join(criteria_parts) if criteria_parts else None
-
+    # FIX: No criteria at all — Is_Active field doesn't exist in Trains form
+    # Fetch all, filter entirely client-side
     result = zoho.get_all_records(
         zoho.forms['reports']['trains'],
-        criteria=criteria,
+        criteria=None,
         limit=limit
     )
-    return jsonify(result), result.get('status_code', 200)
 
+    if not result.get('success'):
+        return jsonify(result), result.get('status_code', 500)
+
+    records = result.get('data', {}).get('data', [])
+    if not isinstance(records, list):
+        records = []
+
+    def get_code(field):
+        """Extract code from display_value like 'MAS-Chennai Central' or '  SBC-Bangalore City'"""
+        if not field:
+            return ''
+        dv = field.get('display_value', '') if isinstance(field, dict) else str(field)
+        return dv.strip().split('-')[0].strip().upper()
+
+    filtered = records
+
+    if source:
+        # Strict match: only trains whose ORIGIN (From_Station) == source
+        # Mid-station stops must NOT appear here — those are handled by /api/trains/connecting
+        filtered = [r for r in filtered if get_code(r.get('From_Station')) == source]
+    if destination:
+        # Strict match: only trains whose FINAL DESTINATION (To_Station) == destination
+        filtered = [r for r in filtered if get_code(r.get('To_Station')) == destination]
+
+    # Additional: filter out inactive trains
+    filtered = [r for r in filtered if str(r.get('Is_Active', 'true')).lower() != 'false']
+
+    if journey_date:
+        try:
+            from datetime import datetime as _dt
+            DAY_ABBR = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+            day_name = DAY_ABBR[_dt.strptime(journey_date, '%Y-%m-%d').weekday()]
+            def runs_on_day(rec):
+                run_days = rec.get('Run_Days', '')
+                if isinstance(run_days, list):
+                    days_list = [d.strip() for d in run_days]
+                elif isinstance(run_days, str) and run_days.strip():
+                    days_list = [d.strip() for d in run_days.split(',')]
+                else:
+                    days_list = []
+                return not days_list or day_name in days_list
+            filtered = [r for r in filtered if runs_on_day(r)]
+        except Exception as e:
+            logger.warning(f"journey_date filter error: {e}")
+
+    result = dict(result)
+    result['data'] = dict(result.get('data', {}))
+    result['data']['data'] = filtered
+    return jsonify(result), result.get('status_code', 200)
 
 @app.route('/api/trains/<train_id>', methods=['GET'])
 def get_train(train_id):
@@ -691,29 +936,23 @@ def get_train(train_id):
 
     return jsonify(result), result.get('status_code', 200)
 
-
+    
 @app.route('/api/trains/<train_id>', methods=['PUT'])
 def update_train(train_id):
-
     data = request.get_json()
-
     if not data:
-        return jsonify({
-            'success': False,
-            'error': 'No data provided'
-        }), 400
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
 
-    # Build payload explicitly so all fields are properly mapped
     payload = {
-        "Train_Number":   data.get("Train_Number") or data.get("train_number"),
-        "Train_Name":     data.get("Train_Name")   or data.get("train_name"),
-        "Train_Type":     data.get("Train_Type")   or data.get("train_type"),
+        "Train_Number":   data.get("Train_Number"),
+        "Train_Name":     data.get("Train_Name"),
+        "Train_Type":     data.get("Train_Type"),
         "From_Station":   extract_lookup_id(data.get("From_Station")),
         "To_Station":     extract_lookup_id(data.get("To_Station")),
         "Departure_Time": data.get("Departure_Time"),
         "Arrival_Time":   data.get("Arrival_Time"),
-        "Duration":       data.get("Duration")       or None,
-        "Distance":       data.get("Distance")       or None,
+        "Duration":       data.get("Duration") or None,
+        "Distance":       data.get("Distance") or None,
         "Fare_SL":        float(data.get("Fare_SL")  or 0),
         "Fare_3A":        float(data.get("Fare_3A")  or 0),
         "Fare_2A":        float(data.get("Fare_2A")  or 0),
@@ -721,15 +960,13 @@ def update_train(train_id):
         "Fare_CC":        float(data.get("Fare_CC")  or 0),
         "Fare_EC":        float(data.get("Fare_EC")  or 0),
         "Fare_2S":        float(data.get("Fare_2S")  or 0),
-        "Total_Seats_SL": int(data.get("Total_Seats_SL")  or 0),
-        "Total_Seats_3A": int(data.get("Total_Seats_3A")  or 0),
-        "Total_Seats_2A": int(data.get("Total_Seats_2A")  or 0),
-        "Total_Seats_1A": int(data.get("Total_Seats_1A")  or 0),
-        "Total_Seats_CC": int(data.get("Total_Seats_CC")  or 0),
-        "Run_Days":       data.get("Run_Days")       or None,
-        "Is_Active":      data.get("Is_Active", True),
+        "Total_Seats_SL": int(data.get("Total_Seats_SL") or 0),
+        "Total_Seats_3A": int(data.get("Total_Seats_3A") or 0),
+        "Total_Seats_2A": int(data.get("Total_Seats_2A") or 0),
+        "Total_Seats_1A": int(data.get("Total_Seats_1A") or 0),
+        "Total_Seats_CC": int(data.get("Total_Seats_CC") or 0),
+        "Run_Days":       data.get("Run_Days") or None,
     }
-    # Remove None values
     payload = {k: v for k, v in payload.items() if v is not None}
 
     result = zoho.update_record(
@@ -737,8 +974,9 @@ def update_train(train_id):
         train_id,
         payload
     )
-
     return jsonify(result), result.get('status_code', 200)
+
+#============== BOOKINGS ====================
 
 @app.route('/api/bookings/<booking_id>/paid', methods=['POST'])
 def mark_booking_paid(booking_id):
@@ -1028,40 +1266,61 @@ def delete_user(user_id):
 def create_booking():
     data = request.get_json()
 
-    # Extract passengers safely
-    passengers = data.get("Passengers")
-    if isinstance(passengers, str):
-        passengers = json.loads(passengers)
-
     def _safe_lookup_id(val):
         if isinstance(val, dict):
             return val.get("ID") or val.get("id")
         return val
 
-    # Passengers: accept JSON string or list
     passengers_raw = data.get("Passengers", [])
     if isinstance(passengers_raw, list):
         passengers_str = json.dumps(passengers_raw)
     else:
-        passengers_str = passengers_raw  # already a string
+        passengers_str = passengers_raw
 
     pnr = data.get("PNR") or ("PNR" + uuid.uuid4().hex[:8].upper())
 
+    # FIX: normalize Journey_Date — frontend sends "YYYY-MM-DD", Zoho needs "DD-MMM-YYYY"
+    def _to_zoho_date(date_str):
+        if not date_str: return None
+        s = str(date_str).strip()
+        MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+        if len(s) >= 11 and s[2] == '-' and s[6] == '-':
+            return s.split(' ')[0]  # already Zoho format
+        if len(s) >= 10 and s[4] == '-' and s[7] == '-':
+            try:
+                yyyy, mm, dd = s[:10].split('-')
+                return f"{dd.zfill(2)}-{MONTHS[int(mm)-1]}-{yyyy}"
+            except Exception: pass
+        return s
+
+    # FIX: normalize Booking_Time — frontend sends ISO, Zoho needs "DD-MMM-YYYY HH:MM:SS"
+    def _to_zoho_datetime(dt_str):
+        MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+        if not dt_str:
+            return datetime.now().strftime("%d-%b-%Y %H:%M:%S")
+        s = str(dt_str).strip()
+        if len(s) >= 11 and s[2] == '-' and s[6] == '-':
+            return s  # already Zoho format
+        try:
+            dt = datetime.strptime(s.replace('T', ' ')[:19], "%Y-%m-%d %H:%M:%S")
+            return dt.strftime("%d-%b-%Y %H:%M:%S")
+        except Exception: pass
+        return datetime.now().strftime("%d-%b-%Y %H:%M:%S")
+
     payload = {
-        "Class":            data.get("Class"),
-        "Journey_Date":     data.get("Journey_Date"),
-        "PNR":              pnr,
-        "Passenger_Count":  int(data.get("Passenger_Count") or 0),
-        "Passengers":       passengers_str,
-        "Quota":            data.get("Quota", "General"),
-        "Booking_Status":   data.get("Booking_Status", "pending"),
-        "Payment_Status":   data.get("Payment_Status", "unpaid"),
-        "Total_Fare":       float(data.get("Total_Fare") or 0),
-        "Booking_Time":     data.get("Booking_Time") or datetime.now().strftime("%d-%b-%Y %H:%M:%S"),
-        "Trains":           _safe_lookup_id(data.get("Trains")),
-        "Users":            _safe_lookup_id(data.get("Users")),
+        "Class":           data.get("Class"),
+        "Journey_Date":    to_zoho_date_only(data.get("Journey_Date")),
+        "PNR":             pnr,
+        "Passenger_Count": int(data.get("Passenger_Count") or 0),
+        "Passengers":      passengers_str,
+        "Quota":           data.get("Quota", "GN"),   # FIX: was "General", schema uses "GN"
+        "Booking_Status":  data.get("Booking_Status", "pending"),
+        "Payment_Status":  data.get("Payment_Status", "unpaid"),
+        "Total_Fare":      float(data.get("Total_Fare") or 0),
+        "Booking_Time":    _to_zoho_datetime(data.get("Booking_Time")),
+        "Trains":          _safe_lookup_id(data.get("Trains")),
+        "Users":           _safe_lookup_id(data.get("Users")),
     }
-    # Remove None values — Zoho rejects explicit null for lookup fields
     payload = {k: v for k, v in payload.items() if v is not None and v != ""}
 
     result = zoho.create_record(zoho.forms['forms']['bookings'], payload)
@@ -1070,26 +1329,59 @@ def create_booking():
         result['data']['PNR'] = pnr
     return jsonify(result), result.get('status_code', 200)
 
+# ── NEW: GET /api/bookings/pnr/<pnr> ──────────────────────────────────────
+@app.route('/api/bookings/pnr/<string:pnr>', methods=['GET'])
+def get_booking_by_pnr(pnr):
+    """Lookup a single booking by PNR number."""
+    result = zoho.get_all_records(
+        zoho.forms['reports']['bookings'],
+        criteria=f'(PNR == "{pnr.strip().upper()}")',
+        limit=1
+    )
+    if not result.get('success'):
+        return jsonify(result), result.get('status_code', 500)
+
+    records = result.get('data', {}).get('data', [])
+    if not records:
+        return jsonify({'success': False, 'error': f'No booking found for PNR: {pnr}'}), 404
+
+    return jsonify({
+        'success': True,
+        'data': {'data': records[0]},
+        'status_code': 200
+    }), 200
+
 @app.route('/api/bookings', methods=['GET'])
 def get_bookings():
-    limit = request.args.get('limit', 200, type=int)
+    limit   = request.args.get('limit', 200, type=int)
     user_id = request.args.get('user_id')
-    status = request.args.get('status')
-    journey_date = request.args.get('journey_date')
+    status  = request.args.get('status')
+    pnr     = request.args.get('pnr')
 
+    # Only text fields in criteria — NOT lookup fields (Zoho rejects lookup criteria)
     criteria_parts = []
-    if user_id:
-        # Zoho lookup field is "Users", not "User_ID"
-        criteria_parts.append(f'(Users == "{user_id}")')
     if status:
         criteria_parts.append(f'(Booking_Status == "{status}")')
-    if journey_date:
-        criteria_parts.append(f'(Journey_Date == "{journey_date}")')
-
+    if pnr:
+        criteria_parts.append(f'(PNR == "{pnr.strip().upper()}")')
     criteria = ' && '.join(criteria_parts) if criteria_parts else None
 
-    result = zoho.get_all_records(zoho.forms['reports']['bookings'], criteria=criteria, limit=limit)
-    return jsonify(result), result.get('status_code', 200)
+    result = zoho.get_all_records(
+        zoho.forms['reports']['bookings'],
+        criteria=criteria,
+        limit=limit
+    )
+    if not result.get('success'):
+        return jsonify(result), result.get('status_code', 500)
+
+    records = result.get('data', {}).get('data', [])
+
+    # Filter by user in Python — Zoho lookup criteria broken for large IDs
+    if user_id:
+        records = [b for b in records
+                   if str((b.get('Users') or {}).get('ID', '')) == str(user_id)]
+
+    return jsonify({'success': True, 'data': {'data': records}, 'status_code': 200}), 200
 
 @app.route('/api/bookings/<booking_id>', methods=['GET'])
 def get_booking(booking_id):
@@ -1192,27 +1484,15 @@ def overview_stats():
 
 
 # ==================== USER BOOKINGS (My Bookings / Upcoming Journeys) ====================
-
 @app.route('/api/users/<user_id>/bookings', methods=['GET'])
 def get_user_bookings(user_id):
-    """GET /api/users/{userId}/bookings  — all or upcoming bookings for a user.
-    Query params:
-      upcoming=true   → only bookings where Journey_Date >= today
-      status=confirmed|cancelled|pending
-    """
     upcoming_only = request.args.get('upcoming', '').lower() == 'true'
     status_filter = request.args.get('status')
 
-    criteria_parts = [f'(Users == "{user_id}")']
-
-    if status_filter:
-        criteria_parts.append(f'(Booking_Status == "{status_filter}")')
-
-    criteria = ' && '.join(criteria_parts)
-
+    # NO Zoho criteria — fetch all bookings, filter in Python
     result = zoho.get_all_records(
         zoho.forms['reports']['bookings'],
-        criteria=criteria,
+        criteria=None,
         limit=500
     )
 
@@ -1221,29 +1501,36 @@ def get_user_bookings(user_id):
 
     records = result.get('data', {}).get('data', [])
 
-    # Apply upcoming filter in Python (Zoho date comparison is limited)
+    logger.info(f"get_user_bookings: total records fetched = {len(records)}")
+
+    # Filter by user ID — Users is a lookup: { "ID": "...", "display_value": "..." }
+    records = [b for b in records
+           if str((b.get('Users') or {}).get('ID', '')) == str(user_id)]
+
+
+    logger.info(f"get_user_bookings: after user filter = {len(records)}")
+
+    # Filter by status
+    if status_filter:
+        records = [b for b in records
+                   if (b.get('Booking_Status') or '').lower() == status_filter.lower()]
+
+    # Filter upcoming
     if upcoming_only:
         today = datetime.now().strftime('%Y-%m-%d')
-        def is_upcoming(b):
-            jd = b.get('Journey_Date', '')
-            if not jd:
-                return False
-            # Parse "DD-MMM-YYYY HH:MM:SS" or "YYYY-MM-DD"
+        def to_ymd(jd):
+            if not jd: return ''
             try:
-                if '-' in jd and len(jd.split('-')[0]) == 4:
-                    return jd[:10] >= today
-                dt = datetime.strptime(jd.split(' ')[0], '%d-%b-%Y')
-                return dt.strftime('%Y-%m-%d') >= today
-            except Exception:
-                return False
-        records = [b for b in records if is_upcoming(b)]
+                if len(jd.split('-')[0]) == 4: return jd[:10]
+                return datetime.strptime(jd.split(' ')[0], '%d-%b-%Y').strftime('%Y-%m-%d')
+            except: return ''
+        records = [b for b in records if to_ymd(b.get('Journey_Date', '')) >= today]
 
     return jsonify({
         'success': True,
         'data': {'data': records, 'count': len(records)},
         'status_code': 200
     }), 200
-
 
 # ==================== TRAIN SCHEDULE ====================
 
@@ -1254,26 +1541,33 @@ def get_train_schedule(train_id):
     """
     # Try fetching from a TrainRoutes table/report
     try:
+        # BUG FIX: Zoho field is "Trains" (plural); list view returns Route_Stops as
+        # {display_value, ID} stubs only — must call get_record_by_id for real stop data.
         route_result = zoho.get_all_records(
             zoho.forms['reports']['train_routes'],
-            criteria=f'(Train_ID == "{train_id}")',
-            limit=100
+            criteria=f'(Trains == "{train_id}")',
+            limit=5
         )
         if route_result.get('success'):
-            routes = route_result.get('data', {}).get('data', [])
-            if routes:
-                # Sort by sequence
-                routes.sort(key=lambda r: int(r.get('Sequence', 0)))
-                stops = [{
-                    'sequence':     r.get('Sequence'),
-                    'station_name': r.get('Station_Name') or r.get('Station', ''),
-                    'station_code': r.get('Station_Code', ''),
-                    'arrival':      r.get('Arrival_Time', '--'),
-                    'departure':    r.get('Departure_Time', '--'),
-                    'halt_mins':    r.get('Halt_Minutes', 0),
-                    'distance_km':  r.get('Distance_KM', ''),
-                } for r in routes]
-                return jsonify({'success': True, 'data': {'stops': stops, 'count': len(stops)}, 'status_code': 200}), 200
+            route_list = route_result.get('data', {}).get('data', [])
+            if route_list:
+                route_id = route_list[0].get('ID')
+                full_res = zoho.get_record_by_id(zoho.forms['reports']['train_routes'], route_id)
+                if full_res.get('success'):
+                    full_route = full_res.get('data', {}).get('data', full_res.get('data', {}))
+                    routes = _get_route_stops(full_route)
+                    if routes:
+                        routes.sort(key=lambda r: int(r.get('Sequence') or 0))
+                        stops = [{
+                            'sequence':     r.get('Sequence'),
+                            'station_name': r.get('Station_Name') or r.get('Station', ''),
+                            'station_code': r.get('Station_Code', ''),
+                            'arrival':      r.get('Arrival_Time', '--'),
+                            'departure':    r.get('Departure_Time', '--'),
+                            'halt_mins':    r.get('Halt_Minutes', 0),
+                            'distance_km':  r.get('Distance_KM', ''),
+                        } for r in routes]
+                        return jsonify({'success': True, 'data': {'stops': stops, 'count': len(stops)}, 'status_code': 200}), 200
     except Exception:
         pass
 
@@ -1360,11 +1654,11 @@ def get_train_vacancy(train_id):
     # 4. Tally booked per class
     booked = {'SL': 0, '3AC': 0, '2AC': 0}
     class_map = {
-        'sleeper': 'SL', 'sl': 'SL',
+        'sleeper': 'SL', 'sl': 'SL', '2s': 'SL',
         '3ac': '3AC', '3a': '3AC',
         '2ac': '2AC', '2a': '2AC',
         '1ac': '2AC', '1a': '2AC',  # fallback to 2AC bucket
-        'cc': 'SL',
+        'cc': 'SL', 'ec': '2AC', 'fc': '2AC',
     }
     for b in bookings:
         cls_raw = (b.get('Class') or '').lower().strip()
@@ -1399,6 +1693,1136 @@ def get_train_vacancy(train_id):
         'status_code': 200
     }), 200
 
+
+
+
+# ==================== TRAIN ROUTES (Subform-based stop management) ====================
+#
+# ZOHO CREATOR DATABASE DESIGN:
+# ─────────────────────────────
+# Form: Train_Routes  (parent form — one record per TRAIN)
+#   Fields:
+#     Train          (Lookup → Trains form)          — which train this route belongs to
+#     Train_Number   (Formula / text)                — denormalised for display
+#     Train_Name     (Formula / text)                — denormalised for display
+#     Total_Stops    (Formula: count of subform rows)
+#     Notes          (Text)
+#
+# Subform: Route_Stops  (child subform inside Train_Routes)
+#   Fields:
+#     Sequence       (Number, required)              — stop order: 1=origin, last=destination
+#     Station_Name   (Text, required)                — full station name
+#     Station_Code   (Text)                          — IRCTC code e.g. MAS, NDLS
+#     Stations       (Lookup → Stations form)        — optional master-station link
+#     Arrival_Time   (Time)                          — scheduled arrival
+#     Departure_Time (Time)                          — scheduled departure
+#     Halt_Minutes   (Number)                        — stop duration in minutes
+#     Distance_KM    (Decimal)                       — cumulative distance from origin
+#     Day_Count      (Number, default 1)             — journey day (for multi-day trains)
+#
+# Report: All_Train_Routes  (report over Train_Routes form)
+# Report: All_Route_Stops   (report over Route_Stops subform — Zoho auto-creates)
+#
+# API ARCHITECTURE:
+# ─────────────────
+# GET    /api/train-routes                → list all Train_Routes records (one per train)
+# GET    /api/train-routes?train_id=X     → get route record + all stops for train X
+# POST   /api/train-routes                → create a new Train_Routes record for a train
+# GET    /api/train-routes/<route_id>     → get single route record with its stops
+# PUT    /api/train-routes/<route_id>     → update route-level fields
+# DELETE /api/train-routes/<route_id>     → delete entire route (and all its stops)
+#
+# GET    /api/train-routes/<route_id>/stops              → list stops (subform rows)
+# POST   /api/train-routes/<route_id>/stops              → add a stop (subform row)
+# PUT    /api/train-routes/<route_id>/stops/<stop_id>    → update a stop
+# DELETE /api/train-routes/<route_id>/stops/<stop_id>    → delete a stop
+#
+# GET    /api/train-routes/connections?station_code=MAS  → all trains passing through a station
+# GET    /api/train-routes/connections/all               → full cross-train connection map
+#
+# ZOHO CREATOR SUBFORM API NOTES:
+# ─────────────────────────────────
+# Creating a record with subform rows:
+#   POST /api/v2/{owner}/{app}/form/Train_Routes
+#   Body: { "data": [{ "Train": "...", "Route_Stops": [ { "Sequence":1, ... } ] }] }
+#
+# Updating subform rows — Zoho requires the parent record ID + subform row ID:
+#   PATCH /api/v2/{owner}/{app}/report/All_Train_Routes/{route_id}
+#   Body: { "data": { "Route_Stops": [ { "ID": "stop_id", "Halt_Minutes": 5 } ] } }
+#
+# Adding new rows to existing record:
+#   PATCH with rows that have no "ID" field — Zoho treats them as new inserts
+#
+# Deleting a subform row:
+#   PATCH with { "data": { "Route_Stops": [ { "ID": "stop_id", "_delete": true } ] } }
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+# ── HELPER: fetch all Train_Routes records with FULL Route_Stops subform data ───
+# Zoho's list-view returns Route_Stops as {display_value, ID} stubs only.
+# Full stop fields (Station_Name, Code, Times, etc.) are only available
+# when fetching each record individually by ID.
+def _fetch_all_routes_full(limit=500):
+    """
+    Returns list of Train_Routes records, each with real Route_Stops data.
+    Strategy:
+      1. Fetch list view (fast, 1 call) — Route_Stops are stubs here.
+      2. _get_route_stops() now parses stubs via display_value → no extra
+         per-record API calls needed unless display_value is also missing.
+    Falls back to get_record_by_id only when display_value parsing yields nothing.
+    """
+    list_res = zoho.get_all_records(
+        zoho.forms['reports']['train_routes'],
+        criteria=None,
+        limit=limit
+    )
+    if not list_res.get('success'):
+        return []
+
+    route_list = list_res.get('data', {}).get('data', [])
+    full_routes = []
+    for r in route_list:
+        rid = r.get('ID')
+        if not rid:
+            continue
+        # _get_route_stops parses display_value stubs automatically
+        parsed_stops = _get_route_stops(r)
+        if parsed_stops:
+            # Inject parsed stops back so callers can use them directly
+            r = dict(r)
+            r['_parsed_stops'] = parsed_stops
+            full_routes.append(r)
+        else:
+            # No display_value either — fetch full record
+            full_res = zoho.get_record_by_id(
+                zoho.forms['reports']['train_routes'], rid
+            )
+            if full_res.get('success'):
+                full_rec = full_res.get('data', {}).get('data', full_res.get('data', {}))
+                full_routes.append(full_rec)
+            else:
+                full_routes.append(r)
+    return full_routes
+
+
+def _build_stop_payload(data):
+    """Build a clean subform row dict from request data."""
+    stop = {}
+    station_id = extract_lookup_id(data.get('Stations') or data.get('station_id'))
+    if station_id:
+        stop['Stations'] = station_id
+    
+    # BUG FIX: Handle None values properly (undefined from frontend becomes null in JSON)
+    # When undefined is sent, data.get('Station_Name', '') returns None (not the default),
+    # so we need to handle None explicitly to avoid calling .strip() on None
+    station_name = data.get('Station_Name')
+    if station_name and isinstance(station_name, str) and station_name.strip():
+        stop['Station_Name'] = station_name.strip()
+    
+    station_code = data.get('Station_Code')
+    if station_code and isinstance(station_code, str) and station_code.strip():
+        stop['Station_Code'] = station_code.strip().upper()
+    
+    if data.get('Sequence') not in (None, ''):
+        stop['Sequence'] = int(data['Sequence'])
+    if data.get('Arrival_Time'):
+        stop['Arrival_Time'] = str(data['Arrival_Time'])
+    if data.get('Departure_Time'):
+        stop['Departure_Time'] = str(data['Departure_Time'])
+    if data.get('Halt_Minutes') not in (None, ''):
+        stop['Halt_Minutes'] = int(data['Halt_Minutes'])
+    if data.get('Distance_KM') not in (None, ''):
+        stop['Distance_KM'] = float(data['Distance_KM'])
+    stop['Day_Count'] = int(data['Day_Count']) if data.get('Day_Count') not in (None, '') else 1
+    return stop
+
+
+def _extract_train_id(field):
+    """Extract train ID from lookup field (dict or string)."""
+    if isinstance(field, dict):
+        return field.get('ID', '')
+    return str(field or '')
+
+
+def _parse_stop_display_value(dv, stop_id):
+    """
+    Parse Zoho stub display_value into a real stop dict.
+    Zoho formats:
+      With times:    "SEQ ARR DAY NAME CODE  NAME DEP STOP_ID"
+      Without times: "SEQ  DAY NAME CODE  NAME  STOP_ID"
+    Used as fallback when get_record_by_id returns stub-only Route_Stops.
+    """
+    import re
+    raw = str(dv).strip()
+    time_re = r'\b\d{2}:\d{2}(?::\d{2})?\b'
+
+    tokens = raw.split()
+    seq = int(tokens[0]) if tokens and tokens[0].isdigit() else None
+
+    times = re.findall(time_re, raw)
+    arr_time = times[0][:5] if len(times) >= 1 else None
+    dep_time = times[1][:5] if len(times) >= 2 else None
+
+    # Remove seq, times, long Zoho IDs
+    clean = re.sub(r'\b\d{15,}\b', '', raw)
+    clean = re.sub(time_re, '', clean)
+    clean = re.sub(r'^\s*\d+\s+', '', clean)
+    clean = re.sub(r'\s+', ' ', clean).strip()
+
+    # Day count: first single-digit token
+    day_match = re.match(r'^(\d)\s+', clean)
+    day = int(day_match.group(1)) if day_match else 1
+    if day_match:
+        clean = clean[day_match.end():]
+
+    # Station code: short ALL-CAPS word (2–5 letters)
+    code_match = re.search(r'\b([A-Z]{2,5})\b', clean)
+    code = code_match.group(1) if code_match else ''
+
+    # Station name: text before the code
+    if code:
+        idx = clean.find(code)
+        name = clean[:idx].strip()
+    else:
+        parts = re.split(r'\s{2,}', clean)
+        name = parts[0].strip() if parts else clean.strip()
+
+    return {
+        'ID':             stop_id,
+        'Sequence':       seq,
+        'Station_Name':   name,
+        'Station_Code':   code,
+        'Arrival_Time':   arr_time,
+        'Departure_Time': dep_time,
+        'Day_Count':      day,
+        'Halt_Minutes':   '',
+        'Distance_KM':    '',
+    }
+
+
+def _get_route_stops(route_record):
+    """
+    Extract Route_Stops subform rows from a Train_Routes record.
+    - If fetched via get_record_by_id: rows have full fields → return as-is.
+    - If fetched via list view (stubs): rows only have {display_value, ID}
+      → parse display_value to recover real stop data.
+    """
+    stops = route_record.get('Route_Stops', [])
+    if not isinstance(stops, list):
+        return []
+
+    real_stops = []
+    for s in stops:
+        if not isinstance(s, dict):
+            continue
+        # Stub detection: no Station_Name and no Station_Code = list-view stub
+        if not s.get('Station_Name') and not s.get('Station_Code') and s.get('display_value'):
+            parsed = _parse_stop_display_value(s['display_value'], s.get('ID', ''))
+            real_stops.append(parsed)
+        else:
+            real_stops.append(s)
+    return real_stops
+
+
+# ── GET /api/train-routes  — list all train route records ──────────────────────
+@app.route('/api/train-routes', methods=['GET'])
+def get_train_routes():
+    """
+    GET /api/train-routes             → all Train_Routes records (summary, no stops)
+    GET /api/train-routes?train_id=X  → route record + parsed stops for that train
+
+    KEY INSIGHT: Zoho NEVER returns full subform field values for Route_Stops —
+    not in list view, not in get_record_by_id. Every stop row always comes as:
+        { "display_value": "SEQ [ARR] DAY NAME CODE NAME [DEP] ID", "ID": "..." }
+    All stop data lives inside display_value. _get_route_stops() calls
+    _parse_stop_display_value() to extract Sequence, Station_Name, Station_Code,
+    Arrival_Time, Departure_Time, Day_Count from that string.
+
+    Therefore get_record_by_id calls are SKIPPED — they waste API calls and
+    return the same stubs. We parse stops directly from the list-view response.
+    """
+    train_id = request.args.get('train_id', '').strip()
+    limit    = request.args.get('limit', 200, type=int)
+
+    if train_id:
+        # Fetch all route records once (list view with stub stops)
+        result = zoho.get_all_records(
+            zoho.forms['reports']['train_routes'],
+            criteria=None,
+            limit=500
+        )
+        if not result.get('success'):
+            return jsonify(result), result.get('status_code', 500)
+
+        all_records = result.get('data', {}).get('data', [])
+
+        # Python-side filter: Zoho field name is "Trains" (plural lookup)
+        matched = []
+        for r in all_records:
+            trains_field = r.get('Trains') or r.get('Train') or {}
+            rec_train_id = trains_field.get('ID', '') if isinstance(trains_field, dict) else str(trains_field or '')
+            if rec_train_id == train_id:
+                matched.append(r)
+
+        if not matched:
+            return jsonify({
+                'success': True,
+                'data': {'data': [], 'count': 0, 'route_record': None},
+                'status_code': 200
+            }), 200
+
+        # Collect stops from all matched records (handles duplicate route records).
+        # _get_route_stops() parses display_value stubs via _parse_stop_display_value().
+        all_stops = []
+        for rec in matched:
+            all_stops.extend(_get_route_stops(rec))
+
+        # De-duplicate by stop ID, sort by Sequence
+        seen_ids     = set()
+        unique_stops = []
+        for s in all_stops:
+            sid = s.get('ID', '')
+            if sid and sid not in seen_ids:
+                seen_ids.add(sid)
+                unique_stops.append(s)
+        unique_stops.sort(key=lambda s: int(s.get('Sequence') or 0))
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'route_record':    matched[0],
+                'stops':           unique_stops,
+                'count':           len(unique_stops),
+                'duplicate_routes': len(matched) > 1,
+                'route_count':     len(matched),
+            },
+            'status_code': 200
+        }), 200
+
+    # No train_id — summary list only
+    result = zoho.get_all_records(zoho.forms['reports']['train_routes'], criteria=None, limit=limit)
+    if not result.get('success'):
+        return jsonify(result), result.get('status_code', 500)
+
+    routes = result.get('data', {}).get('data', [])
+    for r in routes:
+        r['_stop_count'] = len(_get_route_stops(r))
+
+    return jsonify({'success': True, 'data': {'data': routes, 'count': len(routes)}, 'status_code': 200}), 200
+
+
+# ── GET /api/train-routes/<route_id>  — single route with all stops ────────────
+@app.route('/api/train-routes/<route_id>', methods=['GET'])
+def get_train_route(route_id):
+    # Zoho always returns Route_Stops as stubs even via get_record_by_id.
+    # _get_route_stops() parses display_value to extract real stop fields.
+    result = zoho.get_record_by_id(zoho.forms['reports']['train_routes'], route_id)
+    if not result.get('success'):
+        return jsonify(result), result.get('status_code', 200)
+
+    route = result.get('data', {}).get('data', result.get('data', {}))
+    stops = _get_route_stops(route)
+    stops.sort(key=lambda s: int(s.get('Sequence') or 0))
+
+    return jsonify({
+        'success': True,
+        'data': {'route_record': route, 'stops': stops, 'count': len(stops)},
+        'status_code': 200
+    }), 200
+
+
+# ── POST /api/train-routes  — create a new route record (with optional initial stops) ─
+@app.route('/api/train-routes', methods=['POST'])
+def create_train_route():
+    """
+    Create a Train_Routes parent record for a train.
+    Optionally include initial stops in Route_Stops subform.
+
+    Body:
+      {
+        "Train": "<train_id>",
+        "Notes": "...",
+        "stops": [                          ← optional initial subform rows
+          { "Sequence":1, "Station_Name":"Chennai Central", "Station_Code":"MAS", ... },
+          ...
+        ]
+      }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+    train_id = extract_lookup_id(data.get('Train') or data.get('Trains') or data.get('train_id'))
+    if not train_id:
+        return jsonify({'success': False, 'error': 'Train is required'}), 400
+
+    # ── Check if a route record already exists for this train ──
+    # BUG FIX: use server-side criteria with correct field name "Trains"
+    existing = zoho.get_all_records(
+        zoho.forms['reports']['train_routes'],
+        criteria=f'(Trains == "{train_id}")',
+        limit=5
+    )
+    if existing.get('success'):
+        dup = existing.get('data', {}).get('data', [])
+        if dup:
+            return jsonify({
+                'success': False,
+                'error': 'A route record already exists for this train. Use PUT to update or use the stops endpoints.',
+                'existing_route_id': dup[0].get('ID')
+            }), 409
+
+    # ── Build payload — Zoho field is "Trains" (plural) ──
+    payload = {'Trains': train_id}
+    if data.get('Notes'):
+        payload['Notes'] = data['Notes'].strip()
+
+    # Add initial stops as subform rows
+    stops_input = data.get('stops', [])
+    if stops_input and isinstance(stops_input, list):
+        subform_rows = [_build_stop_payload(s) for s in stops_input]
+        payload['Route_Stops'] = subform_rows
+
+    result = zoho.create_record(zoho.forms['forms']['train_routes'], payload)
+    return jsonify(result), result.get('status_code', 200)
+
+
+# ── PUT /api/train-routes/<route_id>  — update route-level fields ──────────────
+@app.route('/api/train-routes/<route_id>', methods=['PUT'])
+def update_train_route(route_id):
+    """Update route-level fields (Notes, Train). Does NOT touch stops."""
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+    payload = {}
+    train_id = extract_lookup_id(data.get('Train') or data.get('Trains') or data.get('train_id'))
+    if train_id:
+        payload['Trains'] = train_id  # BUG FIX: Zoho field is "Trains" (plural)
+    if data.get('Notes') is not None:
+        payload['Notes'] = data['Notes']
+
+    result = zoho.update_record(zoho.forms['reports']['train_routes'], route_id, payload)
+    return jsonify(result), result.get('status_code', 200)
+
+
+# ── DELETE /api/train-routes/<route_id>  — delete entire route record ──────────
+@app.route('/api/train-routes/<route_id>', methods=['DELETE'])
+def delete_train_route(route_id):
+    """Delete the Train_Routes record (and all its Route_Stops subform rows)."""
+    result = zoho.delete_record(zoho.forms['reports']['train_routes'], route_id)
+    return jsonify(result), result.get('status_code', 200)
+
+
+# ── GET /api/train-routes/<route_id>/stops  — list stops (subform rows) ────────
+@app.route('/api/train-routes/<route_id>/stops', methods=['GET'])
+def get_route_stops(route_id):
+    """Return all Route_Stops subform rows for a Train_Routes record, sorted by Sequence."""
+    result = zoho.get_record_by_id(zoho.forms['reports']['train_routes'], route_id)
+    if not result.get('success'):
+        return jsonify(result), result.get('status_code', 500)
+
+    route = result.get('data', {}).get('data', result.get('data', {}))
+    stops = _get_route_stops(route)
+    stops.sort(key=lambda s: int(s.get('Sequence') or 0))
+
+    return jsonify({
+        'success': True,
+        'data': {'stops': stops, 'count': len(stops), 'route_id': route_id},
+        'status_code': 200
+    }), 200
+
+
+def _get_existing_stop_refs(route_id):
+    """
+    CRITICAL helper for all subform PATCH operations.
+
+    Zoho Creator v2 REPLACES the ENTIRE Route_Stops subform array when you
+    PATCH with a Route_Stops list — even if you only intend to add/update one row.
+    Any row whose ID is absent from the payload is silently DELETED.
+
+    Fix: always fetch the current stop IDs and include them in every PATCH.
+    Rows sent with only {ID: '...'} (no other fields) are preserved unchanged.
+    A new row with no ID is inserted. A row with ID + fields is updated.
+    A row with {ID, _delete: None} is deleted.
+    """
+    report = zoho.forms['reports']['train_routes']
+    res = zoho.get_record_by_id(report, route_id)
+    if not res.get('success'):
+        return []
+    rec = res.get('data', {}).get('data', res.get('data', {}))
+    if not isinstance(rec, dict):
+        return []
+    return [
+        {'ID': s['ID']}
+        for s in rec.get('Route_Stops', [])
+        if isinstance(s, dict) and s.get('ID')
+    ]
+
+
+# ── POST /api/train-routes/<route_id>/stops  — add a stop (subform row) ────────
+@app.route('/api/train-routes/<route_id>/stops', methods=['POST'])
+def add_route_stop(route_id):
+    """
+    Add a new stop (subform row) to an existing Train_Routes record.
+
+    Zoho subform insert: PATCH the parent record with the new row (no ID = insert).
+    Body: { "Sequence":3, "Station_Name":"Bangalore City", "Station_Code":"SBC", ... }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+    seq = data.get('Sequence')
+    if seq is None or str(seq).strip() == '':
+        return jsonify({'success': False, 'error': 'Sequence is required'}), 400
+    if not (data.get('Station_Name', '').strip() or data.get('Stations')):
+        return jsonify({'success': False, 'error': 'Station_Name or Stations lookup is required'}), 400
+
+    stop_row = _build_stop_payload(data)
+    report   = zoho.forms['reports']['train_routes']
+
+    # CRITICAL FIX (BUG: Zoho replaces entire subform on PATCH)
+    # Always include all existing stop IDs so they are preserved.
+    # Rows sent with only {ID} are kept unchanged by Zoho.
+    # New row has no ID → Zoho inserts it as a new subform row.
+    existing = _get_existing_stop_refs(route_id)
+    payload  = {'Route_Stops': existing + [stop_row]}
+    result   = zoho.update_record(report, route_id, payload)
+
+    logger.info(f"add_route_stop route={route_id} preserved={len(existing)} new={stop_row} → {result}")
+    return jsonify(result), result.get('status_code', 200)
+
+
+# ── PUT /api/train-routes/<route_id>/stops/<stop_id>  — update a subform row ───
+@app.route('/api/train-routes/<route_id>/stops/<stop_id>', methods=['PUT'])
+def update_route_stop(route_id, stop_id):
+    """
+    Update an existing subform row.
+    Body: { "Station_Name": "...", "Departure_Time": "14:30", ... }
+    
+    CRITICAL: Zoho REPLACES the entire Route_Stops array when PATCH-ing,
+    so we fetch all existing rows and send them back to avoid data loss.
+    Only the target row is updated; others are preserved with {ID: '...'}.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+    # Validate required fields for update
+    seq = data.get('Sequence')
+    if seq is None or str(seq).strip() == '':
+        return jsonify({'success': False, 'error': 'Sequence is required'}), 400
+    if not (data.get('Station_Name', '').strip() or data.get('Stations')):
+        return jsonify({'success': False, 'error': 'Station_Name or Stations lookup is required'}), 400
+
+    stop_row        = _build_stop_payload(data)
+    stop_row['ID']  = stop_id          # required: Zoho matches row by ID
+    report          = zoho.forms['reports']['train_routes']
+
+    # CRITICAL FIX: Fetch all existing rows; send every row so none are wiped.
+    # The target row is replaced with updated data; all others are preserved as {ID}.
+    existing  = _get_existing_stop_refs(route_id)
+    all_rows  = []
+    replaced  = False
+    for ref in existing:
+        if ref['ID'] == stop_id:
+            all_rows.append(stop_row)   # updated row (with ID + new fields)
+            replaced = True
+        else:
+            all_rows.append(ref)        # unchanged row (only ID needed to preserve it)
+    if not replaced:
+        all_rows.append(stop_row)       # safety: stop wasn't in the fetched list
+
+    payload = {'Route_Stops': all_rows}
+    logger.info(f"update_route_stop route={route_id} stop={stop_id} input_data={data} updated_stop={stop_row} total_rows={len(all_rows)}")
+    result  = zoho.update_record(report, route_id, payload)
+    
+    if not result.get('success'):
+        logger.error(f"update_route_stop failed: {result.get('error') or result}")
+
+    logger.info(f"update_route_stop result: {result}")
+    return jsonify(result), result.get('status_code', 200)
+
+
+# ── DELETE /api/train-routes/<route_id>/stops/<stop_id>  — delete a subform row ─
+@app.route('/api/train-routes/<route_id>/stops/<stop_id>', methods=['DELETE'])
+def delete_route_stop(route_id, stop_id):
+    """
+    Delete a single subform row by excluding it from the next full-subform PATCH.
+    Zoho treats any row absent from the payload as deleted.
+    """
+    report = zoho.forms['reports']['train_routes']
+
+    # CRITICAL FIX: fetch all rows, send everything EXCEPT the deleted stop.
+    # This is more reliable than _delete:None across all Zoho plan tiers.
+    existing  = _get_existing_stop_refs(route_id)
+    remaining = [ref for ref in existing if ref['ID'] != stop_id]
+    payload   = {'Route_Stops': remaining}
+    result    = zoho.update_record(report, route_id, payload)
+
+    logger.info(f"delete_route_stop route={route_id} stop={stop_id} remaining={len(remaining)} → {result}")
+    return jsonify(result), result.get('status_code', 200)
+
+
+# ── GET /api/train-routes/connections  — connection map ────────────────────────
+@app.route('/api/train-routes/connections', methods=['GET'])
+def get_route_connections():
+    """
+    GET /api/train-routes/connections?station_code=MAS
+      → all trains passing through station MAS, with their stop details
+
+    GET /api/train-routes/connections/all  (see below)
+
+    Algorithm:
+      1. Fetch all Train_Routes records (each has Route_Stops subform)
+      2. For each stop in each train's route, index by Station_Code
+      3. Stations with 2+ trains = connection point
+      4. Return: { "MAS": { station_code, station_name, trains: [...] }, ... }
+    """
+    station_code = request.args.get('station_code', '').strip().upper()
+
+    # BUG FIX: use _fetch_all_routes_full — list view returns Route_Stops as stubs only
+    all_routes = _fetch_all_routes_full(limit=500)
+    if not all_routes:
+        # still return success, just empty
+        pass
+
+    # Fetch all trains for metadata
+    trains_res = zoho.get_all_records(zoho.forms['reports']['trains'], limit=500)
+    trains_list = trains_res.get('data', {}).get('data', []) if trains_res.get('success') else []
+    trains_by_id = {str(t.get('ID', '')): t for t in trains_list}
+
+    # Build station → trains index
+    station_index = {}   # station_code → { station_name, trains: [] }
+
+    for route_rec in all_routes:
+        # BUG FIX: Zoho field is "Trains" (plural)
+        train_field = route_rec.get('Trains') or route_rec.get('Train') or {}
+        train_id    = _extract_train_id(train_field)
+        train_meta  = trains_by_id.get(train_id, {})
+        train_name  = train_meta.get('Train_Name', route_rec.get('Train_Name', ''))
+        train_num   = train_meta.get('Train_Number', route_rec.get('Train_Number', ''))
+
+        stops = route_rec.get('_parsed_stops') or _get_route_stops(route_rec)
+        total_stops = len(stops)
+        stops_sorted = sorted(stops, key=lambda s: int(s.get('Sequence') or 0))
+
+        for i, stop in enumerate(stops_sorted):
+            code = (stop.get('Station_Code') or '').strip().upper()
+            name = (stop.get('Station_Name') or '').strip()
+            if not code:
+                continue
+
+            seq = int(stop.get('Sequence') or 0)
+            if i == 0:
+                stop_type = 'origin'
+            elif i == total_stops - 1:
+                stop_type = 'destination'
+            else:
+                stop_type = 'intermediate'
+
+            if code not in station_index:
+                station_index[code] = {'station_code': code, 'station_name': name, 'trains': []}
+
+            station_index[code]['trains'].append({
+                'train_id':     train_id,
+                'train_name':   train_name,
+                'train_number': train_num,
+                'stop_type':    stop_type,
+                'sequence':     seq,
+                'arrival':      stop.get('Arrival_Time'),
+                'departure':    stop.get('Departure_Time'),
+                'halt_minutes': stop.get('Halt_Minutes'),
+                'distance_km':  stop.get('Distance_KM'),
+                'day_count':    stop.get('Day_Count', 1),
+            })
+
+    # Filter: only stations where 2+ trains stop = connection points
+    connection_stations = {k: v for k, v in station_index.items() if len(v['trains']) >= 2}
+
+    if station_code:
+        # Return only the requested station
+        if station_code not in station_index:
+            return jsonify({'success': True, 'data': {'station_code': station_code, 'trains': [], 'is_connection': False}, 'status_code': 200}), 200
+        entry = station_index[station_code]
+        return jsonify({
+            'success': True,
+            'data': {
+                'station_code':  station_code,
+                'station_name':  entry['station_name'],
+                'trains':        entry['trains'],
+                'is_connection': len(entry['trains']) >= 2,
+                'train_count':   len(entry['trains']),
+            },
+            'status_code': 200
+        }), 200
+
+    # No filter — return full connection map
+    return jsonify({
+        'success': True,
+        'data': {
+            'connection_stations': connection_stations,
+            'all_stations':        station_index,
+            'connection_count':    len(connection_stations),
+            'total_stations':      len(station_index),
+        },
+        'status_code': 200
+    }), 200
+
+
+# ── GET /api/train-routes/connections/all  — full connection map ────────────────
+@app.route('/api/train-routes/connections/all', methods=['GET'])
+def get_all_connections():
+    """
+    Full cross-train connection map.
+    Returns every station that is shared by 2+ trains, with full train metadata.
+    """
+    # BUG FIX: use _fetch_all_routes_full — list view returns Route_Stops as stubs only
+    all_routes = _fetch_all_routes_full(limit=500)
+
+    trains_res = zoho.get_all_records(zoho.forms['reports']['trains'], limit=500)
+    trains_list = trains_res.get('data', {}).get('data', []) if trains_res.get('success') else []
+    trains_by_id = {str(t.get('ID', '')): t for t in trains_list}
+
+    # station_code → set of train_ids
+    station_trains = {}
+
+    for route_rec in all_routes:
+        # BUG FIX: Zoho field is "Trains" (plural)
+        train_id = _extract_train_id(route_rec.get('Trains') or route_rec.get('Train') or {})
+        train_meta = trains_by_id.get(train_id, {})
+        stops = sorted(route_rec.get('_parsed_stops') or _get_route_stops(route_rec), key=lambda s: int(s.get('Sequence') or 0))
+        n = len(stops)
+
+        for i, stop in enumerate(stops):
+            code = (stop.get('Station_Code') or '').strip().upper()
+            if not code:
+                continue
+            if code not in station_trains:
+                station_trains[code] = {
+                    'station_code': code,
+                    'station_name': stop.get('Station_Name', ''),
+                    'trains': []
+                }
+            station_trains[code]['trains'].append({
+                'train_id':     train_id,
+                'train_name':   train_meta.get('Train_Name', ''),
+                'train_number': train_meta.get('Train_Number', ''),
+                'from_station': train_meta.get('From_Station', {}).get('display_value', '') if isinstance(train_meta.get('From_Station'), dict) else '',
+                'to_station':   train_meta.get('To_Station', {}).get('display_value', '') if isinstance(train_meta.get('To_Station'), dict) else '',
+                'stop_type':    'origin' if i==0 else ('destination' if i==n-1 else 'intermediate'),
+                'sequence':     int(stop.get('Sequence') or 0),
+                'arrival':      stop.get('Arrival_Time'),
+                'departure':    stop.get('Departure_Time'),
+                'halt_minutes': stop.get('Halt_Minutes'),
+                'distance_km':  stop.get('Distance_KM'),
+            })
+
+    # Only connection points (2+ trains)
+    connections = {k: v for k, v in station_trains.items() if len(v['trains']) >= 2}
+
+    # Build route pairs: train A ↔ train B via station
+    pairs = []
+    for code, info in connections.items():
+        train_ids = [t['train_id'] for t in info['trains']]
+        for idx_a in range(len(train_ids)):
+            for idx_b in range(idx_a+1, len(train_ids)):
+                ta = info['trains'][idx_a]
+                tb = info['trains'][idx_b]
+                dep_a = ta.get('departure')
+                arr_b = tb.get('arrival') or tb.get('departure')
+                transfer = None
+                if dep_a and arr_b:
+                    try:
+                        def _mins(t):
+                            h, m = t.split(':')[:2]
+                            return int(h)*60 + int(m)
+                        diff = _mins(arr_b) - _mins(dep_a)
+                        if diff < 0: diff += 1440
+                        transfer = diff
+                    except Exception:
+                        pass
+                pairs.append({
+                    'via_station':    code,
+                    'via_name':       info['station_name'],
+                    'train_a':        ta,
+                    'train_b':        tb,
+                    'transfer_mins':  transfer,
+                    'feasible':       transfer is None or transfer >= 20,
+                })
+
+    pairs.sort(key=lambda p: (p['transfer_mins'] or 9999))
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'connection_stations': connections,
+            'connection_pairs':    pairs,
+            'total_connections':   len(connections),
+            'total_pairs':         len(pairs),
+        },
+        'status_code': 200
+    }), 200
+
+
+# ==================== SEARCH TRAINS BY MID-STATION ====================
+
+@app.route('/api/trains/search-by-station', methods=['GET'])
+def search_trains_by_station():
+    """
+    GET /api/trains/search-by-station?station_code=NGP&journey_date=2026-04-10
+
+    Returns all trains that pass through the given station — whether as
+    origin, destination, or any intermediate stop in Train_Routes.
+
+    Response per train includes:
+      - All standard train fields
+      - stop_info: { sequence, arrival_time, departure_time, halt_minutes, distance_km }
+      - stop_type: 'origin' | 'destination' | 'intermediate'
+    """
+    station_code = request.args.get('station_code', '').strip().upper()
+    journey_date = request.args.get('journey_date', '')
+
+    if not station_code:
+        return jsonify({'success': False, 'error': 'station_code is required'}), 400
+
+    # ── 1. Fetch all train routes with FULL stop data ─────────────────────────
+    # BUG FIX: list view returns Route_Stops as stubs; use _fetch_all_routes_full
+    all_routes = _fetch_all_routes_full(limit=500)
+
+    # ── 2. Build: train_id → sorted stops ────────────────────────────────────
+    from collections import defaultdict
+    train_stops = defaultdict(list)
+    for r in all_routes:
+        # BUG FIX: Zoho field is "Trains" (plural); use _parsed_stops when available
+        t_field = r.get('Trains') or r.get('Train') or {}
+        t_id    = t_field.get('ID') if isinstance(t_field, dict) else str(t_field or '')
+        if t_id:
+            for stop in (r.get('_parsed_stops') or _get_route_stops(r)):
+                stop['_train_id'] = t_id
+                train_stops[t_id].append(stop)
+    for t_id in train_stops:
+        train_stops[t_id].sort(key=lambda s: int(s.get('Sequence') or 0))
+
+    def get_stop_code(stop):
+        code = (stop.get('Station_Code') or '').strip().upper()
+        if code:
+            return code
+        st = stop.get('Stations', {})
+        if isinstance(st, dict):
+            dv = (st.get('display_value') or '').strip()
+            return dv.split('-')[0].strip().upper() if dv else ''
+        return ''
+
+    # ── 3. Find which trains have this station as a stop ─────────────────────
+    matching_train_ids = {}   # train_id → stop_record
+    for t_id, stops in train_stops.items():
+        for stop in stops:
+            if get_stop_code(stop) == station_code:
+                seq      = int(stop.get('Sequence') or 0)
+                max_seq  = int(stops[-1].get('Sequence') or 0)
+                if   seq == int(stops[0].get('Sequence') or 0): stop_type = 'origin'
+                elif seq == max_seq:                             stop_type = 'destination'
+                else:                                           stop_type = 'intermediate'
+                matching_train_ids[t_id] = {
+                    'stop_type':    stop_type,
+                    'sequence':     seq,
+                    'arrival_time':    stop.get('Arrival_Time'),
+                    'departure_time':  stop.get('Departure_Time'),
+                    'halt_minutes':    stop.get('Halt_Minutes'),
+                    'distance_km':     stop.get('Distance_KM'),
+                }
+                break
+
+    # ── 4. Also check From_Station / To_Station on Trains (no route entry) ───
+    trains_res  = zoho.get_all_records(zoho.forms['reports']['trains'], limit=500)
+    trains_list = trains_res.get('data', {}).get('data', []) if trains_res.get('success') else []
+
+    def get_code(field):
+        if not field: return ''
+        dv = field.get('display_value', '') if isinstance(field, dict) else str(field)
+        return dv.strip().split('-')[0].strip().upper()
+
+    result_trains = []
+    for t in trains_list:
+        t_id = str(t.get('ID', ''))
+        if str(t.get('Is_Active', 'true')).lower() == 'false':
+            continue
+
+        # Journey date / run_days filter
+        if journey_date:
+            try:
+                from datetime import datetime as _dt
+                DAY_ABBR = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+                day_name = DAY_ABBR[_dt.strptime(journey_date, '%Y-%m-%d').weekday()]
+                run_days = t.get('Run_Days', '')
+                if isinstance(run_days, list):
+                    days_list = [d.strip() for d in run_days]
+                elif isinstance(run_days, str) and run_days.strip():
+                    days_list = [d.strip() for d in run_days.split(',')]
+                else:
+                    days_list = []
+                if days_list and day_name not in days_list:
+                    continue
+            except Exception:
+                pass
+
+        # Check if station is in routes
+        if t_id in matching_train_ids:
+            t['stop_info'] = matching_train_ids[t_id]
+            t['stop_type'] = matching_train_ids[t_id]['stop_type']
+            result_trains.append(t)
+        # Fallback: check From_Station / To_Station directly on train record
+        elif get_code(t.get('From_Station')) == station_code:
+            t['stop_info'] = {'stop_type': 'origin', 'sequence': 1, 'departure_time': t.get('Departure_Time')}
+            t['stop_type'] = 'origin'
+            result_trains.append(t)
+        elif get_code(t.get('To_Station')) == station_code:
+            t['stop_info'] = {'stop_type': 'destination', 'departure_time': None, 'arrival_time': t.get('Arrival_Time')}
+            t['stop_type'] = 'destination'
+            result_trains.append(t)
+
+    # Sort: origin first, then intermediate, then destination
+    order = {'origin': 0, 'intermediate': 1, 'destination': 2}
+    result_trains.sort(key=lambda x: order.get(x.get('stop_type', 'intermediate'), 1))
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'station_code': station_code,
+            'journey_date': journey_date,
+            'trains': result_trains,
+            'count': len(result_trains),
+        },
+        'status_code': 200,
+    }), 200
+
+
+# ==================== CONNECTING TRAINS ====================
+
+@app.route('/api/trains/connecting', methods=['GET'])
+def get_connecting_trains():
+    """
+    Find connecting train journeys between two stations.
+    GET /api/trains/connecting?from=MAS&to=NDLS&date=2026-04-10
+
+    Algorithm:
+    1. Find all direct trains from `from` → `to` (already done in /api/trains)
+    2. For each possible connecting station C:
+       - Leg 1: trains that pass through `from` AND `C`  (from_seq < c_seq)
+       - Leg 2: trains that pass through `C` AND `to`    (c_seq < to_seq)
+       - Connecting station C must have departure_leg2 >= arrival_leg1 + 30min buffer
+
+    Returns: { direct: [...], connecting: [ { leg1, leg2, via_station, transfer_mins } ] }
+    """
+    from_code = request.args.get('from', '').strip().upper()
+    to_code   = request.args.get('to',   '').strip().upper()
+    date_str  = request.args.get('date', '')    # YYYY-MM-DD
+    limit     = request.args.get('limit', 200, type=int)
+
+    if not from_code or not to_code:
+        return jsonify({'success': False, 'error': 'from and to are required'}), 400
+
+    # ── 1. Fetch ALL train routes with FULL stop data ─────────────────────────
+    # BUG FIX: list view returns Route_Stops as stubs; use _fetch_all_routes_full
+    all_routes = _fetch_all_routes_full(limit=500)
+
+    # ── 2. Build lookup: train_id → list of stops (sorted by Sequence) ───────
+    from collections import defaultdict
+    train_stops = defaultdict(list)
+    for r in all_routes:
+        # BUG FIX: Zoho field is "Trains" (plural); use _parsed_stops when available
+        t_field = r.get('Trains') or r.get('Train') or {}
+        t_id    = t_field.get('ID') if isinstance(t_field, dict) else str(t_field or '')
+        if t_id:
+            for stop in (r.get('_parsed_stops') or _get_route_stops(r)):
+                train_stops[t_id].append(stop)
+    for t_id in train_stops:
+        train_stops[t_id].sort(key=lambda s: int(s.get('Sequence') or 0))
+
+    # ── 3. Fetch all trains (for metadata) ────────────────────────────────────
+    trains_res = zoho.get_all_records(zoho.forms['reports']['trains'], limit=limit)
+    trains_list = trains_res.get('data', {}).get('data', []) if trains_res.get('success') else []
+    trains_by_id = {str(t.get('ID', '')): t for t in trains_list}
+
+    def get_station_code(stop):
+        """Normalize station code from a route stop record."""
+        code = (stop.get('Station_Code') or '').strip().upper()
+        if code:
+            return code
+        # fallback: from lookup Station field display_value
+        st = stop.get('Stations', {})
+        if isinstance(st, dict):
+            dv = (st.get('display_value') or '').strip()
+            # display_value may be "MAS-Chennai Central" → take part before -
+            return dv.split('-')[0].strip().upper() if dv else ''
+        return ''
+
+    def find_seq(stops, station_code):
+        """Return (sequence, stop_record) or None."""
+        for s in stops:
+            if get_station_code(s) == station_code:
+                return int(s.get('Sequence') or 0), s
+        return None
+
+    def parse_time_to_mins(time_str):
+        """Convert HH:MM or HH:MM:SS to minutes since midnight."""
+        if not time_str:
+            return None
+        try:
+            parts = str(time_str).strip().split(':')
+            return int(parts[0]) * 60 + int(parts[1])
+        except Exception:
+            return None
+
+    # ── 4. Classify trains: direct, or has from/to as stops ──────────────────
+    direct_train_ids   = set()
+    trains_via_from    = {}   # train_id → (seq_from, stop_from)
+    trains_via_to      = {}   # train_id → (seq_to, stop_to)
+
+    for t_id, stops in train_stops.items():
+        from_info = find_seq(stops, from_code)
+        to_info   = find_seq(stops, to_code)
+        if from_info and to_info:
+            seq_from, _ = from_info
+            seq_to, _   = to_info
+            if seq_from < seq_to:
+                direct_train_ids.add(t_id)
+        if from_info:
+            trains_via_from[t_id] = from_info
+        if to_info:
+            trains_via_to[t_id] = to_info
+
+    # ── 5. Find connecting via each intermediate station ──────────────────────
+    # Build: connecting_station → { leg1_trains: [], leg2_trains: [] }
+    via_stations = defaultdict(lambda: {'leg1': [], 'leg2': []})
+
+    # Leg 1 candidates: trains that go from_code → some_station (from_seq < other_seq)
+    for t_id, (seq_from, stop_from) in trains_via_from.items():
+        if t_id in direct_train_ids:
+            continue
+        stops = train_stops[t_id]
+        for s in stops:
+            via_code = get_station_code(s)
+            if not via_code or via_code == from_code:
+                continue
+            via_seq = int(s.get('Sequence') or 0)
+            if via_seq > seq_from:
+                via_stations[via_code]['leg1'].append({
+                    'train_id':       t_id,
+                    'seq_from':       seq_from,
+                    'seq_to':         via_seq,
+                    'stop_from':      stop_from,
+                    'stop_to':        s,
+                    'arrival_via':    s.get('Arrival_Time'),
+                    'departure_from': stop_from.get('Departure_Time'),
+                })
+
+    # Leg 2 candidates: trains that go some_station → to_code
+    for t_id, (seq_to, stop_to) in trains_via_to.items():
+        if t_id in direct_train_ids:
+            continue
+        stops = train_stops[t_id]
+        for s in stops:
+            via_code = get_station_code(s)
+            if not via_code or via_code == to_code:
+                continue
+            via_seq = int(s.get('Sequence') or 0)
+            if via_seq < seq_to:
+                via_stations[via_code]['leg2'].append({
+                    'train_id':          t_id,
+                    'seq_from':          via_seq,
+                    'seq_to':            seq_to,
+                    'stop_from':         s,
+                    'stop_to':           stop_to,
+                    'departure_via':     s.get('Departure_Time'),
+                    'arrival_to':        stop_to.get('Arrival_Time'),
+                })
+
+    # ── 6. Pair leg1 + leg2 at each via station ────────────────────────────────
+    connections = []
+    for via_code, legs in via_stations.items():
+        for l1 in legs['leg1']:
+            for l2 in legs['leg2']:
+                if l1['train_id'] == l2['train_id']:
+                    continue  # same train → direct (already captured)
+
+                # Connection time check (arrival leg1 < departure leg2 + 30 min buffer)
+                arr_mins = parse_time_to_mins(l1['arrival_via'])
+                dep_mins = parse_time_to_mins(l2['departure_via'])
+                if arr_mins is not None and dep_mins is not None:
+                    transfer_mins = dep_mins - arr_mins
+                    # Allow overnight connections (add 1440 if negative)
+                    if transfer_mins < 0:
+                        transfer_mins += 1440
+                    if transfer_mins < 30:
+                        continue  # too tight
+                else:
+                    transfer_mins = None
+
+                t1 = trains_by_id.get(l1['train_id'], {})
+                t2 = trains_by_id.get(l2['train_id'], {})
+
+                connections.append({
+                    'via_station':    via_code,
+                    'transfer_mins':  transfer_mins,
+                    'leg1': {
+                        'train_id':      l1['train_id'],
+                        'train_name':    t1.get('Train_Name', ''),
+                        'train_number':  t1.get('Train_Number', ''),
+                        'train_type':    t1.get('Train_Type', ''),
+                        'from_code':     from_code,
+                        'to_code':       via_code,
+                        'departure':     l1['departure_from'],
+                        'arrival':       l1['arrival_via'],
+                        'fare_sl':       t1.get('Fare_SL', 0),
+                        'fare_3a':       t1.get('Fare_3A', 0),
+                        'fare_2a':       t1.get('Fare_2A', 0),
+                        'train_record':  t1,
+                    },
+                    'leg2': {
+                        'train_id':      l2['train_id'],
+                        'train_name':    t2.get('Train_Name', ''),
+                        'train_number':  t2.get('Train_Number', ''),
+                        'train_type':    t2.get('Train_Type', ''),
+                        'from_code':     via_code,
+                        'to_code':       to_code,
+                        'departure':     l2['departure_via'],
+                        'arrival':       l2['arrival_to'],
+                        'fare_sl':       t2.get('Fare_SL', 0),
+                        'fare_3a':       t2.get('Fare_3A', 0),
+                        'fare_2a':       t2.get('Fare_2A', 0),
+                        'train_record':  t2,
+                    },
+                })
+
+    # Sort by transfer_mins
+    connections.sort(key=lambda c: (c['transfer_mins'] or 9999))
+    # Deduplicate (same pair of trains at same via)
+    seen = set()
+    unique_connections = []
+    for c in connections:
+        key = (c['leg1']['train_id'], c['leg2']['train_id'], c['via_station'])
+        if key not in seen:
+            seen.add(key)
+            unique_connections.append(c)
+
+    # ── 7. Build direct trains list ───────────────────────────────────────────
+    direct_trains = [trains_by_id[t_id] for t_id in direct_train_ids if t_id in trains_by_id]
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'from':        from_code,
+            'to':          to_code,
+            'date':        date_str,
+            'direct':      direct_trains,
+            'connecting':  unique_connections[:20],  # cap at 20 results
+            'total_direct':     len(direct_trains),
+            'total_connecting': len(unique_connections),
+        },
+        'status_code': 200
+    }), 200
 
 # ==================== ERROR HANDLERS ====================
 
@@ -1686,6 +3110,44 @@ def hash_password(password):
     """Simple SHA-256 hash. Replace with bcrypt in production."""
     return hashlib.sha256(password.encode()).hexdigest()
 
+# ==================== ROLE HELPERS ====================
+
+ADMIN_EMAIL   = 'admin@admin.com'
+ADMIN_DOMAIN  = 'admin.com'      # any @admin.com email gets Admin role
+
+def is_admin_email(email: str) -> bool:
+    """Returns True for admin@admin.com OR any *@admin.com address."""
+    e = (email or '').strip().lower()
+    return e == ADMIN_EMAIL or e.endswith('@' + ADMIN_DOMAIN)
+
+def resolve_role(user_record):
+    """
+    Determine canonical role for a user record.
+    Priority:
+      1. Any @admin.com email  → 'Admin'  (covers admin@admin.com, test@admin.com, etc.)
+      2. Role field == 'Admin' → 'Admin'
+      3. Everything else       → 'User'     
+    """
+    email = (user_record.get('Email') or '').strip().lower()
+    if is_admin_email(email):
+        return 'Admin'
+    role = (user_record.get('Role') or '').strip()
+    return role if role in ('Admin', 'User') else 'User'
+
+def require_admin(f):
+    """Decorator: blocks non-admin callers on sensitive endpoints."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # Simple header-based check: frontend sends X-User-Email on admin calls
+        caller_email = request.headers.get('X-User-Email', '').strip().lower()
+        caller_role  = request.headers.get('X-User-Role',  '').strip()
+        if not is_admin_email(caller_email) and caller_role.lower() != 'admin':
+            return jsonify({'success': False, 'error': 'Admin access required'}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+# ==================== AUTH ====================
+
 @app.route('/api/auth/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -1695,6 +3157,11 @@ def register():
     is_valid, missing = validate_required(data, ['Full_Name', 'Email', 'Password'])
     if not is_valid:
         return jsonify({'success': False, 'error': f'Missing fields: {", ".join(missing)}'}), 400
+
+    email = (data.get('Email') or '').strip().lower()
+
+    # ── @admin.com emails register normally but get Role='Admin' ───────────────
+    # No secret key needed — the @admin.com domain itself is the access control.
 
     # Check if email already exists
     existing = zoho.get_all_records(
@@ -1706,19 +3173,134 @@ def register():
     if existing_records:
         return jsonify({'success': False, 'error': 'Email already registered'}), 409
 
+    # @admin.com → Admin role, everything else → User role
+    assigned_role = 'Admin' if is_admin_email(email) else 'User'
     payload = {
         'Full_Name':    data.get('Full_Name'),
         'Email':        data.get('Email'),
         'Phone_Number': data.get('Phone_Number', ''),
         'Address':      data.get('Address', ''),
         'Password':     hash_password(data.get('Password')),
-        'Role':         data.get('Role', 'User'),
+        'Role':         assigned_role,
     }
 
     result = zoho.create_record(zoho.forms['forms']['users'], payload)
     if result.get('success'):
         return jsonify({'success': True, 'message': 'Registration successful'}), 201
     return jsonify(result), result.get('status_code', 500)
+
+
+# ── POST /api/auth/setup-admin ─────────────────────────────────────────────────
+@app.route('/api/auth/setup-admin', methods=['POST'])
+def setup_admin():
+    """
+    One-time endpoint to create (or reset the password of) the admin account.
+
+    Protected by ADMIN_SETUP_KEY environment variable — only whoever has
+    access to the server environment can call this successfully.
+
+    Body:
+      {
+        "setup_key":  "<value of ADMIN_SETUP_KEY env var>",
+        "Full_Name":  "Admin User",        ← optional, defaults to "Admin"
+        "Password":   "YourStrongPass!"    ← required
+      }
+
+    Behaviour:
+      • If admin@admin.com does NOT exist → creates it with Role = Admin.
+      • If admin@admin.com already exists → updates the password (reset).
+      • Wrong setup_key → 403 Forbidden.
+      • Missing ADMIN_SETUP_KEY env var → 503 (setup not enabled).
+
+    Set in .env / Railway environment:
+      ADMIN_SETUP_KEY=some-long-random-secret-string
+    """
+    # ── 1. Check the env-var secret is configured ──
+    setup_key_expected = os.getenv('ADMIN_SETUP_KEY', '').strip()
+    if not setup_key_expected:
+        return jsonify({
+            'success': False,
+            'error':   'Admin setup is not enabled on this server. '
+                       'Set the ADMIN_SETUP_KEY environment variable to enable it.'
+        }), 503
+
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+    # ── 2. Validate the caller's setup key ──
+    provided_key = (data.get('setup_key') or '').strip()
+    if provided_key != setup_key_expected:
+        logger.warning('setup-admin: wrong setup_key attempted')
+        return jsonify({'success': False, 'error': 'Invalid setup key'}), 403
+
+    # ── 3. Validate password ──
+    password = (data.get('Password') or '').strip()
+    if not password:
+        return jsonify({'success': False, 'error': 'Password is required'}), 400
+
+    full_name = (data.get('Full_Name') or 'Admin').strip()
+
+    # ── 4. Validate and resolve target email ──
+    # Accepts any @admin.com address (admin@admin.com, test@admin.com, etc.)
+    # Defaults to admin@admin.com if not provided.
+    target_email = (data.get('Email') or ADMIN_EMAIL).strip().lower()
+    if not is_admin_email(target_email):
+        return jsonify({
+            'success': False,
+            'error': f'Only @{ADMIN_DOMAIN} email addresses can be created via this endpoint.'
+        }), 400
+
+    # ── 5. Check if user already exists ──
+    existing = zoho.get_all_records(
+        zoho.forms['reports']['users'],
+        criteria=f'(Email == "{target_email}")',
+        limit=1
+    )
+    existing_records = existing.get('data', {}).get('data', []) if existing.get('success') else []
+
+    if existing_records:
+        # ── Exists → reset password + ensure Role=Admin ──
+        admin_id = existing_records[0].get('ID')
+        result = zoho.update_record(
+            zoho.forms['reports']['users'],
+            admin_id,
+            {
+                'Password':  hash_password(password),
+                'Role':      'Admin',
+                'Full_Name': full_name,
+            }
+        )
+        if result.get('success'):
+            logger.info(f'setup-admin: password reset for {target_email}')
+            return jsonify({
+                'success': True,
+                'message': f'Admin account updated for {target_email}.',
+                'action':  'updated',
+                'email':   target_email,
+            }), 200
+        return jsonify(result), result.get('status_code', 500)
+
+    else:
+        # ── Does not exist → create with Role=Admin ──
+        payload = {
+            'Full_Name':    full_name,
+            'Email':        target_email,
+            'Password':     hash_password(password),
+            'Role':         'Admin',
+            'Phone_Number': data.get('Phone_Number', ''),
+            'Address':      data.get('Address', ''),
+        }
+        result = zoho.create_record(zoho.forms['forms']['users'], payload)
+        if result.get('success'):
+            logger.info(f'setup-admin: created admin account {target_email}')
+            return jsonify({
+                'success': True,
+                'message': f'Admin account created for {target_email}.',
+                'action':  'created',
+                'email':   target_email,
+            }), 201
+        return jsonify(result), result.get('status_code', 500)
 
 
 @app.route('/api/auth/login', methods=['POST'])
@@ -1752,6 +3334,9 @@ def login():
     if stored_hash != input_hash:
         return jsonify({'success': False, 'error': 'Invalid email or password'}), 401
 
+    # Resolve role: admin@admin.com always gets 'Admin' regardless of Zoho Role field
+    canonical_role = resolve_role(user)
+
     return jsonify({
         'success': True,
         'message': 'Login successful',
@@ -1761,11 +3346,9 @@ def login():
             'Email':        user.get('Email'),
             'Phone_Number': user.get('Phone_Number'),
             'Address':      user.get('Address'),
-            'Role':         user.get('Role', 'User'),
+            'Role':         canonical_role,   # FIXED: always canonical
         }
     }), 200
-
-
 
 # ==================== MAIN ====================
 

@@ -83,8 +83,12 @@ function StopBadge({ type }) {
   );
 }
 
+// Stable unique key counter — Date.now() alone can collide when stops are
+// added quickly (same millisecond), causing React key collisions and breaking
+// the _key-based identity checks used in validateStop.
+let _stopKeySeq = 0;
 const blankStop = (seq) => ({
-  _key: `${Date.now()}-${seq}`,
+  _key: `k${++_stopKeySeq}`,
   Stations:'', Station_Name:'', Station_Code:'',
   Sequence: seq, Arrival_Time:'', Departure_Time:'',
   Halt_Minutes:'', Distance_KM:'', Day_Count:'1',
@@ -113,7 +117,8 @@ function validateStop(stop, allStops) {
   else if (!Number.isInteger(seq) || seq < 1)
     errs.Sequence = 'Sequence must be a whole number ≥ 1.';
   else {
-    const dup = allStops.filter(s => s !== stop && Number(s.Sequence) === seq);
+    // FIX: use _key not object reference — reference breaks after array .map() rebuilds
+    const dup = allStops.filter(s => s._key !== stop._key && Number(s.Sequence) === seq);
     if (dup.length) errs.Sequence = `Sequence ${seq} already used by another stop.`;
   }
 
@@ -128,7 +133,7 @@ function validateStop(stop, allStops) {
 
   if (stop.Arrival_Time && stop.Departure_Time && stop.Arrival_Time > stop.Departure_Time) {
     // Cross-field: allow midnight-crossing by flagging only if same Day_Count
-    if ((stop.Day_Count || '1') === '1')
+    if (Number(stop.Day_Count || 1) === 1)  // FIX: number compare, not string ===
       errs.Departure_Time = 'Departure should be after Arrival (or increase Day Count for overnight).';
   }
 
@@ -173,8 +178,13 @@ function DeleteConfirmBanner({ label, onConfirm, onCancel, loading }) {
   );
 }
 
-// ─── StopRow (inside CreateRoutePanel) ───────────────────────────────────────
-function StopRow({ stop, idx, total, stations, onChange, onRemove, onMoveUp, onMoveDown, errors }) {
+// ─── StopRow (inside CreateRoutePanel — drag-to-reorder) ─────────────────────
+// Position in the list IS the sequence number. No manual sequence input needed.
+// Drag the ⠿ handle to reorder; sequence badges update automatically on drop.
+function StopRow({
+  stop, idx, total, stations, onChange, onRemove, errors,
+  onDragStart, onDragEnter, onDragEnd, isDragOver,
+}) {
   const type   = stopType(idx, total);
   const dotCol = TYPE_CFG[type].color;
   const e      = errors || {};
@@ -190,27 +200,34 @@ function StopRow({ stop, idx, total, stations, onChange, onRemove, onMoveUp, onM
   };
 
   return (
-    <div style={{ display:'flex', gap:10, alignItems:'flex-start',
-                  background:C.raised, border:`1px solid ${Object.keys(e).length ? C.red : C.hi}`,
-                  borderLeft:`3px solid ${dotCol}`, borderRadius:10,
-                  padding:'12px 14px', marginBottom:8, position:'relative' }}>
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragEnter={onDragEnter}
+      onDragEnd={onDragEnd}
+      onDragOver={ev => ev.preventDefault()}
+      style={{
+        display:'flex', gap:10, alignItems:'flex-start',
+        background: isDragOver ? 'rgba(59,130,246,0.10)' : C.raised,
+        border:`1px solid ${isDragOver ? C.blue : (Object.keys(e).length ? C.red : C.hi)}`,
+        borderLeft:`3px solid ${dotCol}`, borderRadius:10,
+        padding:'12px 14px', marginBottom:8, position:'relative',
+        cursor:'grab', transition:'background 0.12s, border-color 0.12s',
+        userSelect:'none',
+      }}>
 
-      {/* Sequence badge */}
-      <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:4, flexShrink:0 }}>
-        <div style={{ width:28, height:28, borderRadius:'50%', background:dotCol,
-                      display:'flex', alignItems:'center', justifyContent:'center',
-                      fontSize:11, fontWeight:800, color:'#fff' }}>
+      {/* Drag handle + sequence badge — auto-numbered by position */}
+      <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:5, flexShrink:0 }}>
+        <span title="Drag to reorder"
+          style={{ fontSize:16, color:C.faint, lineHeight:1, cursor:'grab' }}>&#8286;</span>
+        <div style={{
+          width:28, height:28, borderRadius:'50%', background:dotCol,
+          display:'flex', alignItems:'center', justifyContent:'center',
+          fontSize:11, fontWeight:800, color:'#fff',
+        }}>
           {stop.Sequence}
         </div>
-        {/* Move buttons */}
-        <button onClick={()=>onMoveUp(idx)} disabled={idx===0}
-          style={{ padding:'1px 5px', borderRadius:4, border:`1px solid ${C.hi}`,
-                   background:'transparent', color:idx===0?C.faint:C.muted,
-                   fontSize:10, cursor:idx===0?'default':'pointer', fontFamily:FONT }}>▲</button>
-        <button onClick={()=>onMoveDown(idx)} disabled={idx===total-1}
-          style={{ padding:'1px 5px', borderRadius:4, border:`1px solid ${C.hi}`,
-                   background:'transparent', color:idx===total-1?C.faint:C.muted,
-                   fontSize:10, cursor:idx===total-1?'default':'pointer', fontFamily:FONT }}>▼</button>
+        <StopBadge type={type} />
       </div>
 
       <div style={{ flex:1, minWidth:0 }}>
@@ -218,7 +235,7 @@ function StopRow({ stop, idx, total, stations, onChange, onRemove, onMoveUp, onM
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 90px', gap:8, marginBottom:8 }}>
           <div>
             <span style={lbS}>Station Lookup</span>
-            <select value={stop.Stations} onChange={e=>pickStation(e.target.value)}
+            <select value={stop.Stations} onChange={ev => pickStation(ev.target.value)}
               style={{...inp(), cursor:'pointer'}} onFocus={onFocus} onBlur={onBlur}>
               <option value="">— pick from master list —</option>
               {stations.map(s => (
@@ -232,8 +249,8 @@ function StopRow({ stop, idx, total, stations, onChange, onRemove, onMoveUp, onM
             <span style={lbS}>Station Name *</span>
             <input value={stop.Station_Name} placeholder="e.g. Chennai Central"
               onChange={ev => set('Station_Name', ev.target.value)}
-              style={inp(e.Station_Name)}
-              onFocus={onFocus} onBlur={ev=>onBlur(ev, !!e.Station_Name)} />
+              style={inp(e.Station_Name)} onFocus={onFocus}
+              onBlur={ev => onBlur(ev, !!e.Station_Name)} />
             <InlineError msg={e.Station_Name} />
           </div>
           <div>
@@ -241,20 +258,13 @@ function StopRow({ stop, idx, total, stations, onChange, onRemove, onMoveUp, onM
             <input value={stop.Station_Code} placeholder="MAS" maxLength={8}
               onChange={ev => set('Station_Code', ev.target.value.toUpperCase())}
               style={{...inp(e.Station_Code), fontFamily:MONO}}
-              onFocus={onFocus} onBlur={ev=>onBlur(ev, !!e.Station_Code)} />
+              onFocus={onFocus} onBlur={ev => onBlur(ev, !!e.Station_Code)} />
             <InlineError msg={e.Station_Code} />
           </div>
         </div>
 
-        {/* Row 2: Timing fields */}
-        <div style={{ display:'grid', gridTemplateColumns:'90px 1fr 1fr 72px 90px 56px', gap:8 }}>
-          <div>
-            <span style={lbS}>Seq *</span>
-            <input type="number" min={1} value={stop.Sequence}
-              onChange={ev => set('Sequence', ev.target.value)}
-              style={inp(e.Sequence)} onFocus={onFocus} onBlur={ev=>onBlur(ev, !!e.Sequence)} />
-            <InlineError msg={e.Sequence} />
-          </div>
+        {/* Row 2: Timing — no Sequence input; drag position assigns sequence */}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 72px 90px 56px', gap:8 }}>
           <div>
             <span style={lbS}>Arrival</span>
             <input type="time" value={stop.Arrival_Time}
@@ -265,28 +275,32 @@ function StopRow({ stop, idx, total, stations, onChange, onRemove, onMoveUp, onM
             <span style={lbS}>Departure</span>
             <input type="time" value={stop.Departure_Time}
               onChange={ev => set('Departure_Time', ev.target.value)}
-              style={inp(e.Departure_Time)} onFocus={onFocus} onBlur={ev=>onBlur(ev, !!e.Departure_Time)} />
+              style={inp(e.Departure_Time)} onFocus={onFocus}
+              onBlur={ev => onBlur(ev, !!e.Departure_Time)} />
             <InlineError msg={e.Departure_Time} />
           </div>
           <div>
             <span style={lbS}>Halt (m)</span>
             <input type="number" min={0} value={stop.Halt_Minutes} placeholder="0"
               onChange={ev => set('Halt_Minutes', ev.target.value)}
-              style={inp(e.Halt_Minutes)} onFocus={onFocus} onBlur={ev=>onBlur(ev, !!e.Halt_Minutes)} />
+              style={inp(e.Halt_Minutes)} onFocus={onFocus}
+              onBlur={ev => onBlur(ev, !!e.Halt_Minutes)} />
             <InlineError msg={e.Halt_Minutes} />
           </div>
           <div>
             <span style={lbS}>Dist (km)</span>
             <input type="number" min={0} step="0.1" value={stop.Distance_KM} placeholder="0"
               onChange={ev => set('Distance_KM', ev.target.value)}
-              style={inp(e.Distance_KM)} onFocus={onFocus} onBlur={ev=>onBlur(ev, !!e.Distance_KM)} />
+              style={inp(e.Distance_KM)} onFocus={onFocus}
+              onBlur={ev => onBlur(ev, !!e.Distance_KM)} />
             <InlineError msg={e.Distance_KM} />
           </div>
           <div>
             <span style={lbS}>Day</span>
             <input type="number" min={1} value={stop.Day_Count} placeholder="1"
               onChange={ev => set('Day_Count', ev.target.value)}
-              style={inp(e.Day_Count)} onFocus={onFocus} onBlur={ev=>onBlur(ev, !!e.Day_Count)} />
+              style={inp(e.Day_Count)} onFocus={onFocus}
+              onBlur={ev => onBlur(ev, !!e.Day_Count)} />
             <InlineError msg={e.Day_Count} />
           </div>
         </div>
@@ -307,10 +321,12 @@ function StopRow({ stop, idx, total, stations, onChange, onRemove, onMoveUp, onM
 // ─── CreateRoutePanel ─────────────────────────────────────────────────────────
 function CreateRoutePanel({ train, stations, onCreated, onCancel }) {
   const { addToast } = useToast();
-  const [stops,    setStops]    = useState([blankStop(1), blankStop(2)]);
-  const [stopErrs, setStopErrs] = useState([{}, {}]);
-  const [saving,   setSaving]   = useState(false);
+  const [stops,     setStops]     = useState([blankStop(1), blankStop(2)]);
+  const [stopErrs,  setStopErrs]  = useState([{}, {}]);
+  const [saving,    setSaving]    = useState(false);
   const [globalErr, setGlobalErr] = useState('');
+  // Drag-and-drop state — dragIdx = index being dragged
+  const [dragIdx,   setDragIdx]   = useState(null);
 
   const resequence = list =>
     list.map((s, i) => ({ ...s, Sequence: i + 1 }));
@@ -324,9 +340,7 @@ function CreateRoutePanel({ train, stations, onCreated, onCancel }) {
   const changeStop = (idx, updated) => {
     const next = stops.map((s, i) => i === idx ? updated : s);
     setStops(next);
-    // Live re-validate only the changed stop (and sequence peers)
-    const errs = validateAllStops(next);
-    setStopErrs(errs);
+    setStopErrs(validateAllStops(next));
     setGlobalErr('');
   };
 
@@ -337,23 +351,19 @@ function CreateRoutePanel({ train, stations, onCreated, onCancel }) {
     setStopErrs(validateAllStops(next));
   };
 
-  const moveUp = (idx) => {
-    if (idx === 0) return;
+  // Drag handlers — HTML5 draggable API
+  const handleDragStart = (idx) => setDragIdx(idx);
+  const handleDragEnter = (idx) => {
+    if (dragIdx === null || dragIdx === idx) return;
     const next = [...stops];
-    [next[idx-1], next[idx]] = [next[idx], next[idx-1]];
+    const [dragged] = next.splice(dragIdx, 1);
+    next.splice(idx, 0, dragged);
     const reseq = resequence(next);
     setStops(reseq);
     setStopErrs(validateAllStops(reseq));
+    setDragIdx(idx);   // track new position of the dragged item
   };
-
-  const moveDown = (idx) => {
-    if (idx === stops.length - 1) return;
-    const next = [...stops];
-    [next[idx], next[idx+1]] = [next[idx+1], next[idx]];
-    const reseq = resequence(next);
-    setStops(reseq);
-    setStopErrs(validateAllStops(reseq));
-  };
+  const handleDragEnd = () => setDragIdx(null);
 
   const buildPayload = s => {
     const p = { Sequence: Number(s.Sequence), Day_Count: s.Day_Count !== '' ? Number(s.Day_Count) : 1 };
@@ -406,7 +416,7 @@ function CreateRoutePanel({ train, stations, onCreated, onCancel }) {
           <div style={{ fontSize:11, color:C.muted, marginTop:4, lineHeight:1.6 }}>
             Add all stops below, then click{' '}
             <strong style={{color:C.green}}>Create Route</strong>.{' '}
-            Use <strong style={{color:C.text}}>▲ ▼</strong> to reorder.
+            Drag <strong style={{color:C.text}}>&#8286;</strong> to reorder stops.
             <br/>
             <span style={{color:C.faint}}>Nothing is written to the database until you submit.</span>
           </div>
@@ -427,15 +437,23 @@ function CreateRoutePanel({ train, stations, onCreated, onCancel }) {
             <span style={{ fontSize:10, color:C.muted }}>{l}</span>
           </div>
         ))}
+        <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+          <span style={{ fontSize:12, color:C.faint }}>&#8286;</span>
+          <span style={{ fontSize:10, color:C.faint }}>Drag to reorder</span>
+        </div>
       </div>
 
       {/* Stop rows */}
       {stops.map((stop, idx) => (
-        <StopRow key={stop._key || idx}
+        <StopRow key={stop._key}
           stop={stop} idx={idx} total={stops.length}
           stations={stations} errors={stopErrs[idx] || {}}
           onChange={changeStop} onRemove={removeStop}
-          onMoveUp={moveUp} onMoveDown={moveDown} />
+          isDragOver={dragIdx !== null && dragIdx === idx}
+          onDragStart={() => handleDragStart(idx)}
+          onDragEnter={() => handleDragEnter(idx)}
+          onDragEnd={handleDragEnd}
+        />
       ))}
 
       {/* Add stop */}
@@ -479,16 +497,26 @@ function CreateRoutePanel({ train, stations, onCreated, onCancel }) {
 // ─── StopForm (add / edit a stop on existing route) ───────────────────────────
 function StopForm({ initial, stations, onSave, onCancel, saving, title, existingSequences }) {
   const init = initial || {};
+  // Strip HH:MM:SS → HH:MM for time inputs
+  const toHHMM = (t) => {
+    if (!t) return '';
+    const s = String(t).trim();
+    if (/^\d{2}:\d{2}$/.test(s)) return s;
+    if (/^\d{2}:\d{2}:\d{2}$/.test(s)) return s.slice(0, 5);
+    return s.slice(0, 5) || '';
+  };
+
   const initialState = {
     Stations:       typeof init.Stations === 'object' ? (init.Stations?.ID || '') : (init.Stations || ''),
     Station_Name:   init.Station_Name   || '',
     Station_Code:   init.Station_Code   || '',
     Sequence:       init.Sequence       ?? '',
-    Arrival_Time:   init.Arrival_Time   || '',
-    Departure_Time: init.Departure_Time || '',
-    Halt_Minutes:   init.Halt_Minutes   ?? '',
-    Distance_KM:    init.Distance_KM    ?? '',
-    Day_Count:      init.Day_Count      ?? '1',
+    Arrival_Time:   toHHMM(init.Arrival_Time),
+    Departure_Time: toHHMM(init.Departure_Time),
+    // Halt_Minutes and Distance_KM come from Zoho as strings ("5") or ""
+    Halt_Minutes:   (init.Halt_Minutes !== null && init.Halt_Minutes !== undefined && init.Halt_Minutes !== '') ? String(init.Halt_Minutes) : '',
+    Distance_KM:    (init.Distance_KM  !== null && init.Distance_KM  !== undefined && init.Distance_KM  !== '') ? String(init.Distance_KM)  : '',
+    Day_Count:      (init.Day_Count !== null && init.Day_Count !== undefined && init.Day_Count !== '') ? String(init.Day_Count) : '1',
   };
   const [f, setF] = useState(initialState);
   const [errs, setErrs] = useState({});
@@ -515,8 +543,11 @@ function StopForm({ initial, stations, onSave, onCancel, saving, title, existing
     // Build a fake "stop list" so duplicate-seq check works:
     // Existing sequences excluding this stop's own original sequence
     const otherSeqs = (existingSequences || []).filter(s => !isEdit || Number(s) !== Number(initialState.Sequence));
-    const fakeStop = { ...f };
-    const fakeAll = otherSeqs.map(seq => ({ Sequence: seq }));
+    // FIX: fakeAll entries and fakeStop must all have distinct _keys,
+    // otherwise the s._key !== stop._key check in validateStop degrades to
+    // undefined !== undefined = false, silently disabling duplicate detection.
+    const fakeStop = { ...f, _key: 'current' };
+    const fakeAll = otherSeqs.map((seq, i) => ({ _key: `other-${i}`, Sequence: seq }));
     fakeAll.push(fakeStop); // current stop is last so peers = otherSeqs
 
     const e = validateStop(fakeStop, fakeAll);
@@ -526,17 +557,19 @@ function StopForm({ initial, stations, onSave, onCancel, saving, title, existing
 
   const submit = () => {
     if (!validate()) return;
-    onSave({
-      Stations:       f.Stations       || undefined,
-      Station_Name:   f.Station_Name.trim() || undefined,
-      Station_Code:   f.Station_Code.trim().toUpperCase() || undefined,
-      Sequence:       Number(f.Sequence),
-      Arrival_Time:   f.Arrival_Time   || undefined,
-      Departure_Time: f.Departure_Time || undefined,
-      Halt_Minutes:   f.Halt_Minutes !== '' ? Number(f.Halt_Minutes) : undefined,
-      Distance_KM:    f.Distance_KM  !== '' ? Number(f.Distance_KM) : undefined,
-      Day_Count:      f.Day_Count    !== '' ? Number(f.Day_Count)   : 1,
-    });
+    // Build payload - exclude undefined fields to avoid sending null values to backend
+    const payload = {
+      Sequence: Number(f.Sequence),
+      Day_Count: f.Day_Count !== '' ? Number(f.Day_Count) : 1,
+    };
+    if (f.Stations) payload.Stations = f.Stations;
+    if (f.Station_Name?.trim()) payload.Station_Name = f.Station_Name.trim();
+    if (f.Station_Code?.trim()) payload.Station_Code = f.Station_Code.trim().toUpperCase();
+    if (f.Arrival_Time) payload.Arrival_Time = f.Arrival_Time;
+    if (f.Departure_Time) payload.Departure_Time = f.Departure_Time;
+    if (f.Halt_Minutes !== '') payload.Halt_Minutes = Number(f.Halt_Minutes);
+    if (f.Distance_KM !== '') payload.Distance_KM = Number(f.Distance_KM);
+    onSave(payload);
   };
 
   return (
@@ -620,6 +653,20 @@ function StopForm({ initial, stations, onSave, onCancel, saving, title, existing
           <InlineError msg={errs.Day_Count} />
         </div>
       </div>
+
+      {/* NOTE: Halt_Minutes & Distance_KM will appear blank when editing a stop
+          loaded from Zoho. Zoho's list-view returns these fields only as a
+          display_value string which doesn't include halt/distance data.
+          Leave blank to preserve the existing value; fill in to update it. */}
+      {isEdit && (
+        <div style={{ fontSize:10, color:C.muted, padding:'6px 10px', borderRadius:6,
+                      background:`rgba(100,116,139,0.07)`, border:`1px solid ${C.hi}`,
+                      marginBottom:12, lineHeight:1.5 }}>
+          ℹ&nbsp; <strong>Halt</strong> and <strong>Distance</strong> fields may show blank —
+          Zoho doesn't include these in its list-view response. Leave blank to keep
+          the existing value, or type a new value to update it.
+        </div>
+      )}
 
       <div style={{ display:'flex', gap:8 }}>
         <button onClick={submit} disabled={saving}
@@ -821,6 +868,25 @@ export default function TrainRoutesPage() {
     : allTrains;
 
   // ── Route loading ──────────────────────────────────────────────────────────
+  // Normalize a Zoho time string (HH:MM:SS or HH:MM) to HH:MM for <input type="time">
+  const toTimeInput = (t) => {
+    if (!t) return '';
+    const s = String(t).trim();
+    // Already HH:MM
+    if (/^\d{2}:\d{2}$/.test(s)) return s;
+    // HH:MM:SS
+    if (/^\d{2}:\d{2}:\d{2}$/.test(s)) return s.slice(0, 5);
+    return s.slice(0, 5) || '';
+  };
+
+  const normaliseStop = (stop) => ({
+    ...stop,
+    Arrival_Time:   toTimeInput(stop.Arrival_Time),
+    Departure_Time: toTimeInput(stop.Departure_Time),
+    // Zoho lookup fields → plain string for form selects
+    Stations: typeof stop.Stations === 'object' ? (stop.Stations?.ID || '') : (stop.Stations || ''),
+  });
+
   const loadRoute = useCallback(async (trainId) => {
     setStopsLoading(true);
     setEditingStop(null);
@@ -832,8 +898,12 @@ export default function TrainRoutesPage() {
       const res = await trainRoutesApi.getByTrain(trainId);
       const d   = res?.data || {};
       setRouteRecord(d.route_record || null);
-      setStops((d.stops || []).sort((a, b) => Number(a.Sequence || 0) - Number(b.Sequence || 0)));
-    } catch { addToast('Failed to load route', 'error'); }
+      const rawStops = d.stops || [];
+      const sorted = rawStops
+        .map(normaliseStop)
+        .sort((a, b) => Number(a.Sequence || 0) - Number(b.Sequence || 0));
+      setStops(sorted);
+    } catch (e) { addToast(e?.message || 'Failed to load route', 'error'); }
     finally  { setStopsLoading(false); }
   }, [addToast]);
 
@@ -857,10 +927,19 @@ export default function TrainRoutesPage() {
   const reload = () => loadRoute(selectedId);
 
   // ── Guard: warn before switching train if create wizard is open ────────────
+  // FIX: replaced window.confirm() with inline DirtyBanner (state-based)
+  const [dirtySwitchTarget, setDirtySwitchTarget] = useState(null); // { id } when pending
+
   const handleSelectTrain = (id) => {
-    if (showCreate && id !== selectedId) {
-      if (!window.confirm('You have an unsaved route setup. Switch train and discard it?')) return;
+    if ((showCreate || editingStop) && id !== selectedId) {
+      setDirtySwitchTarget({ id });   // show inline banner instead of browser dialog
+      return;
     }
+    _doSelectTrain(id);
+  };
+
+  const _doSelectTrain = (id) => {
+    setDirtySwitchTarget(null);
     setSelectedId(id);
     setTab('route');
     setShowCreate(false);
@@ -871,16 +950,23 @@ export default function TrainRoutesPage() {
   // ── Stop CRUD ──────────────────────────────────────────────────────────────
   const handleAddStop = async (formData) => {
     const routeId = gid(routeRecord);
-    if (!routeId) { addToast('No route record exists — create the route first.', 'error'); return; }
+    if (!routeId) {
+      addToast('Route record not found. Try refreshing or creating the route again.', 'error');
+      return;
+    }
     setSaving(true);
     try {
       const res = await trainRoutesApi.addStop(routeId, formData);
+      // Backend now returns { success:true, message, data } on success
       if (res?.success === false) throw new Error(res?.error || res?.message || 'Add stop failed');
       addToast('Stop added ✓', 'success');
       setEditingStop(null);
-      await reload();
-    } catch(e) { addToast(e.message || 'Add stop failed', 'error'); }
-    finally    { setSaving(false); }
+      await reload();   // re-fetches route record → gets updated Route_Stops stub list → fetches each by ID
+    } catch(e) {
+      addToast(e.message || 'Add stop failed', 'error');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleUpdateStop = async (stopId, formData) => {
@@ -892,7 +978,7 @@ export default function TrainRoutesPage() {
       if (res?.success === false) throw new Error(res?.error || res?.message || 'Update failed');
       addToast('Stop updated ✓', 'success');
       setEditingStop(null);
-      await reload();
+      await reload();   // re-fetches all stops fresh from Zoho
     } catch(e) { addToast(e.message || 'Update failed', 'error'); }
     finally    { setSaving(false); }
   };
@@ -996,6 +1082,33 @@ export default function TrainRoutesPage() {
           </div>
         ) : (
           <>
+            {/* ── Dirty-switch inline banner ───────────────────────── */}
+            {/* FIX: replaced window.confirm() with this non-blocking inline warning */}
+            {dirtySwitchTarget && (
+              <div style={{ padding:'12px 16px', borderRadius:10,
+                            background:'rgba(245,158,11,0.08)',
+                            border:`1px solid rgba(245,158,11,0.3)`,
+                            display:'flex', alignItems:'center', gap:12,
+                            flexWrap:'wrap', flexShrink:0 }}>
+                <span style={{ flex:1, fontSize:12, color:C.amber }}>
+                  ⚠ You have unsaved changes. Switch train and discard them?
+                </span>
+                <button onClick={() => _doSelectTrain(dirtySwitchTarget.id)}
+                  style={{ padding:'5px 14px', borderRadius:7, border:'none',
+                           background:C.amber, color:'#000', fontSize:11, fontWeight:800,
+                           cursor:'pointer', fontFamily:FONT }}>
+                  Discard &amp; Switch
+                </button>
+                <button onClick={() => setDirtySwitchTarget(null)}
+                  style={{ padding:'5px 12px', borderRadius:7,
+                           border:`1px solid ${C.hi}`, background:'transparent',
+                           color:C.muted, fontSize:11, fontWeight:600,
+                           cursor:'pointer', fontFamily:FONT }}>
+                  Stay
+                </button>
+              </div>
+            )}
+
             {/* ── Header ──────────────────────────────────────────── */}
             <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12,
                           padding:'14px 18px', display:'flex', justifyContent:'space-between',
@@ -1033,13 +1146,21 @@ export default function TrainRoutesPage() {
 
                 {tab === 'route' && routeRecord && !showCreate && (
                   <button
-                    onClick={() => { setPendingDeleteId(null); setEditingStop('new'); }}
-                    disabled={editingStop === 'new'}
+                    onClick={() => { 
+                      if (!gid(routeRecord)) {
+                        addToast('Route record not fully loaded. Please wait or refresh.', 'error');
+                        return;
+                      }
+                      setPendingDeleteId(null); 
+                      setEditingStop('new'); 
+                    }}
+                    disabled={editingStop === 'new' || !gid(routeRecord)}
+                    title={!gid(routeRecord) ? 'Route record is loading or invalid' : 'Add a new stop to this route'}
                     style={{padding:'8px 16px',borderRadius:8,border:'none',
-                             background:editingStop==='new'?C.faint:C.blue,
-                             color:editingStop==='new'?C.muted:'#fff',
+                             background:(editingStop==='new' || !gid(routeRecord))?C.faint:C.blue,
+                             color:(editingStop==='new' || !gid(routeRecord))?C.muted:'#fff',
                              fontSize:12,fontWeight:700,fontFamily:FONT,
-                             cursor:editingStop==='new'?'not-allowed':'pointer'}}>
+                             cursor:(editingStop==='new' || !gid(routeRecord))?'not-allowed':'pointer'}}>
                     ＋ Add Stop
                   </button>
                 )}
@@ -1164,7 +1285,7 @@ export default function TrainRoutesPage() {
             <div style={{fontSize:11,color:C.faint,flexShrink:0}}>
               💡 <strong style={{color:C.muted}}>Station Code</strong> required for connection detection.
               Seq 1 = Origin · Last = Destination · Middle = Intermediate.
-              <strong style={{color:C.muted}}> ▲▼</strong> reorders stops in the setup wizard.
+              <strong style={{color:C.muted}}> drag &#8286;</strong> to reorder stops in the setup wizard.
             </div>
           </>
         )}

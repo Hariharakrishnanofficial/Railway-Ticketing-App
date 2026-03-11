@@ -105,7 +105,7 @@ export default function App() {
             <Route path="/search"         element={<SearchPage />} />
             <Route path="/pnr-status"     element={<PNRStatus />} />
             <Route path="/train-schedule" element={<TrainSchedule />} />
-            {/* <Route path="/chart-vacancy"  element={<ChartVacancy />} /> */}
+            <Route path="/chart-vacancy"  element={<ChartVacancy />} />
             <Route path="/my-bookings"    element={<MyBookings />} />
             <Route path="/cancel-ticket"  element={<CancelTicket />} />
             <Route path="*"               element={<Navigate to="/" replace />} />

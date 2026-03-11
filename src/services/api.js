@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3002/api/';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://railway-ticketing-system-50039510865.development.catalystappsail.in/api';
 
 // ─── Role helpers ─────────────────────────────────────────────────────────────
 
@@ -48,10 +48,20 @@ client.interceptors.response.use(
     if (url.includes('/auth/') && err.response?.data) {
       return Promise.resolve(err.response.data);
     }
-    const msg = err.response?.data?.error || err.response?.data?.message || err.message || 'Network error';
+    // BUG FIX: Zoho sometimes wraps error messages inside nested objects.
+    // Previously only checked .error and .message at the top level, so Zoho
+    // errors like { message: { message: "..." } } produced the unhelpful
+    // fallback "Request failed with status code 400".
+    const errBody = err.response?.data;
+    const msg =
+      errBody?.error ||
+      (typeof errBody?.message === 'string' ? errBody.message : null) ||
+      errBody?.message?.message ||
+      err.message ||
+      'Network error';
     const e   = new Error(msg);
     e.status  = err.response?.status;
-    e.body    = err.response?.data;
+    e.body    = errBody;
     return Promise.reject(e);
   }
 );
@@ -306,10 +316,30 @@ export const trainRoutesApi = {
   delete:       (id)            => client.delete(`/train-routes/${id}`, { headers: adminHeaders() }),
 
   // Subform stop CRUD (scoped to a route record)
-  getStops:     (routeId)              => client.get(`/train-routes/${routeId}/stops`),
-  addStop:      (routeId, data)        => client.post(`/train-routes/${routeId}/stops`, data, { headers: adminHeaders() }),
-  updateStop:   (routeId, stopId, data)=> client.put(`/train-routes/${routeId}/stops/${stopId}`, data, { headers: adminHeaders() }),
-  deleteStop:   (routeId, stopId)      => client.delete(`/train-routes/${routeId}/stops/${stopId}`, { headers: adminHeaders() }),
+  getStops:     (routeId)              => {
+    if (!routeId || routeId === 'null' || routeId === 'undefined')
+      return Promise.reject(new Error('Invalid route ID - cannot fetch stops'));
+    return client.get(`/train-routes/${routeId}/stops`);
+  },
+  addStop:      (routeId, data)        => {
+    if (!routeId || routeId === 'null' || routeId === 'undefined')
+      return Promise.reject(new Error('Invalid route ID - route record may not exist or not be fully loaded'));
+    return client.post(`/train-routes/${routeId}/stops`, data, { headers: adminHeaders() });
+  },
+  updateStop:   (routeId, stopId, data)=> {
+    if (!routeId || routeId === 'null' || routeId === 'undefined')
+      return Promise.reject(new Error('Invalid route ID'));
+    if (!stopId || stopId === 'null' || stopId === 'undefined')
+      return Promise.reject(new Error('Invalid stop ID'));
+    return client.put(`/train-routes/${routeId}/stops/${stopId}`, data, { headers: adminHeaders() });
+  },
+  deleteStop:   (routeId, stopId)      => {
+    if (!routeId || routeId === 'null' || routeId === 'undefined')
+      return Promise.reject(new Error('Invalid route ID'));
+    if (!stopId || stopId === 'null' || stopId === 'undefined')  
+      return Promise.reject(new Error('Invalid stop ID'));
+    return client.delete(`/train-routes/${routeId}/stops/${stopId}`, { headers: adminHeaders() });
+  },
 
   // Connection queries
   connections:    (stationCode) => client.get('/train-routes/connections', { params: { station_code: stationCode } }),
