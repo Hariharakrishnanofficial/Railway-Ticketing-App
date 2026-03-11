@@ -13,7 +13,7 @@ import axios from 'axios';
 //
 // DO NOT use window.location.origin as a fallback — in local dev that resolves
 // to http://localhost:<vite-port>/api/ which is the frontend, not the backend.
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://railway-ticketing-system-50039510865.development.catalystappsail.in/api/';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/';
 
 // ─── Role helpers ─────────────────────────────────────────────────────────────
 
@@ -21,6 +21,17 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://railway-ticketing
 export function getCurrentUser() {
   try { return JSON.parse(sessionStorage.getItem('rail_user')); }
   catch { return null; }
+}
+
+/** Read the Catalyst custom token stored after login. */
+export function getCatalystToken() {
+  return sessionStorage.getItem('catalyst_token') || null;
+}
+
+/** Save Catalyst token returned by the login endpoint. */
+export function setCatalystToken(token) {
+  if (token) sessionStorage.setItem('catalyst_token', token);
+  else sessionStorage.removeItem('catalyst_token');
 }
 
 /**
@@ -50,6 +61,17 @@ const client = axios.create({
   baseURL: BASE_URL,
   timeout: 20000,
   headers: { 'Content-Type': 'application/json' },
+});
+
+// Inject Catalyst token into every request automatically.
+// Catalyst's gateway reads the Authorization header to validate cross-domain
+// requests — this is what resolves CORS between Slate and AppSail.
+client.interceptors.request.use((config) => {
+  const token = getCatalystToken();
+  if (token) {
+    config.headers['Authorization'] = `Bearer ${token}`;
+  }
+  return config;
 });
 
 client.interceptors.response.use(

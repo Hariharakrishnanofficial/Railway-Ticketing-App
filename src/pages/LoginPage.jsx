@@ -122,6 +122,8 @@ export default function LoginPage({ onLogin }) {
           throw new Error('Unexpected server response. Please try again.');
 
         sessionStorage.setItem('rail_user', JSON.stringify(userData));
+        // Store Catalyst token — sent in Authorization header on all API calls
+        if (res?.catalyst_token) setCatalystToken(res.catalyst_token);
         addToast(`Welcome back, ${userData.Full_Name || userData.Email || 'User'}!`, 'success');
         onLogin?.(userData);
 
