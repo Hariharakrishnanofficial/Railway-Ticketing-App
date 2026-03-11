@@ -7,7 +7,7 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api': {
-        target: 'http://localhost:9000',
+        target: 'https://railway-ticketing-system-50039510865.development.catalystappsail.in',
         changeOrigin: true,
       }
     }
