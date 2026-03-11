@@ -5,10 +5,7 @@ import axios from 'axios';
 // 2. Otherwise derive from current page origin so the app works on any host
 //    (same-origin, Catalyst, etc.) without a hardcoded localhost fallback
 //    that would cause net::ERR_FAILED on HTTPS deployments (mixed content).
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ||
-  (typeof window !== 'undefined'
-    ? `${window.location.origin}/api/`
-    : 'https://railway-ticketing-system-50039510865.development.catalystappsail.in/api/');
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://railway-ticketing-system-50039510865.development.catalystappsail.in/api/';
 
 // ─── Role helpers ─────────────────────────────────────────────────────────────
 
