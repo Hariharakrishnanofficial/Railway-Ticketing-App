@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || ' https://railway-ticketing-system-50039510865.development.catalystappsail.in/api/';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://railway-ticketing-system-50039510865.development.catalystappsail.in/api/';
 
 // ─── Role helpers ─────────────────────────────────────────────────────────────
 
