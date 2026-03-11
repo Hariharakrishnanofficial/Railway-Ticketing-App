@@ -1,11 +1,19 @@
 import axios from 'axios';
 
-// Resolve base URL:
-// 1. Use VITE_API_BASE_URL env var if set at build time (explicit config)
-// 2. Otherwise derive from current page origin so the app works on any host
-//    (same-origin, Catalyst, etc.) without a hardcoded localhost fallback
-//    that would cause net::ERR_FAILED on HTTPS deployments (mixed content).
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://railway-ticketing-system-50039510865.development.catalystappsail.in/api/';
+// ─── Base URL resolution ───────────────────────────────────────────────────────
+//
+// LOCAL DEV  (npm run dev):
+//   VITE_API_BASE_URL is intentionally LEFT BLANK in .env so axios uses the
+//   relative path '/api/' and the Vite proxy (vite.config.js) forwards it to
+//   the real backend. This avoids CORS issues and port-mismatch problems.
+//
+// PRODUCTION / CATALYST DEPLOY:
+//   Set VITE_API_BASE_URL to the full backend URL in your build environment.
+//   e.g. https://railway-ticketing-system-50039510865.development.catalystappsail.in/api/
+//
+// DO NOT use window.location.origin as a fallback — in local dev that resolves
+// to http://localhost:<vite-port>/api/ which is the frontend, not the backend.
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/';
 
 // ─── Role helpers ─────────────────────────────────────────────────────────────
 
