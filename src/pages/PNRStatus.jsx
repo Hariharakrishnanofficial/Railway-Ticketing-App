@@ -6,14 +6,13 @@
  */
 import { useState } from 'react';
 import {
-  displayZohoDate, displayZohoDateTime, parseZohoDateOnly,
+  displayZohoDate, displayZohoDateTime, parseZohoDateOnly, bookingsApi,
 } from '../services/api';
 import { useToast } from '../context/ToastContext';
 import { PageHeader, Card, Icon, Badge, Spinner } from '../components/UI';
 
 const FONT = "'Inter','Segoe UI',system-ui,-apple-system,sans-serif";
 const MONO = "'JetBrains Mono','Fira Code','Courier New',monospace";
-const BASE  = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:4600/api';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function getLookup(f) {
@@ -117,7 +116,7 @@ export default function PNRStatus() {
     setLoading(true);
     setResult(null);
     try {
-      const res  = await fetch(`${BASE}/bookings/pnr/${trimmed}`).then(r => r.json());
+      const res = await bookingsApi.getByPNR(trimmed);
       if (!res?.success) {
         setError(res?.error || `No booking found for PNR: ${trimmed}`);
       } else {
@@ -125,7 +124,7 @@ export default function PNRStatus() {
         setResult(rec);
       }
     } catch (err) {
-      setError('Network error — please try again');
+      setError(err.message || 'Network error — please try again');
     } finally {
       setLoading(false);
     }

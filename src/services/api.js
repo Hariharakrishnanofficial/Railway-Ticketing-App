@@ -228,6 +228,7 @@ export const bookingsApi = {
   confirm: (id) => client.post(`/bookings/${id}/confirm`, {}, { headers: adminHeaders() }),
   markPaid: (id) => client.post(`/bookings/${id}/paid`, {}, { headers: adminHeaders() }),
   cancel: (id, data = {}) => client.post(`/bookings/${id}/cancel`, data),
+  getByPNR: (pnr) => client.get(`/bookings/pnr/${pnr}`),
 };
 
 // Settings — admin only

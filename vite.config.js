@@ -7,13 +7,13 @@ export default defineConfig({
     port: 3000,
     strictPort: false,   // allow Vite to try 3001, 3002... if 3000 is taken
     proxy: {
-      // ALL /api/* requests are forwarded to the Catalyst backend.
+      // ALL /api/* requests are forwarded to the Flask backend on port 9000.
       // This means axios can use baseURL = '/api/' in local dev — no CORS,
       // no port mismatch, no hardcoded backend URL needed in the browser.
       '/api': {
-        target: 'https://railway-ticketing-system-50039510865.development.catalystappsail.in',
+        target: 'http://localhost:9000',
         changeOrigin: true,
-        secure: true,
+        secure: false,
       }
     }
   }
