@@ -54,6 +54,8 @@ const BLANK = {
   Base_Fare: '', Dynamic_Fare: '', Concession_Type: 'General',
   Concession_Percent: '0', Effective_From: '', Effective_To: '',
   Is_Active: true, Distance_KM: '',
+  GST_Percentage: '5', Tatkal_Premium_Percentage: '',
+  Superfast_Surcharge: '', Catering_Charge: '',
 };
 
 function resolveValue(row, key) {
@@ -89,6 +91,10 @@ function rowToForm(row) {
     // Normalize Is_Active — Zoho may return boolean or string
     Is_Active: row.Is_Active === true || row.Is_Active === 'true',
     Distance_KM: row.Distance_KM ?? '',
+    GST_Percentage: row.GST_Percentage ?? '5',
+    Tatkal_Premium_Percentage: row.Tatkal_Premium_Percentage ?? '',
+    Superfast_Surcharge: row.Superfast_Surcharge ?? '',
+    Catering_Charge: row.Catering_Charge ?? '',
   };
 }
 
@@ -174,6 +180,7 @@ export default function FaresPage() {
 
   const openCreate = () => { setForm(BLANK); setErrors({}); setEditRow(null); setApiErr(null); setModal('create'); };
   const openEdit = row => { setForm(rowToForm(row)); setErrors({}); setEditRow(row); setApiErr(null); setModal('edit'); };
+  const openView = row => { setEditRow(row); setModal('view'); };
 
   const handleSave = async () => {
     const e = validate(form);
@@ -191,8 +198,12 @@ export default function FaresPage() {
         Concession_Percent: Number(form.Concession_Percent),
         Effective_From: toZohoDateTime(form.Effective_From + 'T00:00') ?? form.Effective_From,
         Effective_To: form.Effective_To ? (toZohoDateTime(form.Effective_To + 'T00:00') ?? form.Effective_To) : null,
-        Is_Active: form.Is_Active,
+        Is_Active: form.Is_Active ? 'true' : 'false',
         Distance_KM: form.Distance_KM ? Number(form.Distance_KM) : null,
+        GST_Percentage: form.GST_Percentage ? Number(form.GST_Percentage) : 5,
+        Tatkal_Premium_Percentage: form.Tatkal_Premium_Percentage ? Number(form.Tatkal_Premium_Percentage) : null,
+        Superfast_Surcharge: form.Superfast_Surcharge ? Number(form.Superfast_Surcharge) : null,
+        Catering_Charge: form.Catering_Charge ? Number(form.Catering_Charge) : null,
       };
 
       const res = modal === 'create'
@@ -289,6 +300,7 @@ export default function FaresPage() {
           rows={filtered}
           loading={loading}
           resolveValue={resolveValue}
+          onView={openView}
           onEdit={openEdit}
           onDelete={handleDelete}
         />
@@ -368,6 +380,18 @@ export default function FaresPage() {
               />
             </FormRow>
 
+            <FormDivider label="Surcharges & Tax" />
+
+            <FormRow cols={2}>
+              <Field label="GST %" name="GST_Percentage" value={form.GST_Percentage} onChange={handleChange} type="number" placeholder="5" />
+              <Field label="Tatkal Premium %" name="Tatkal_Premium_Percentage" value={form.Tatkal_Premium_Percentage} onChange={handleChange} type="number" placeholder="Optional" />
+            </FormRow>
+
+            <FormRow cols={2}>
+              <Field label="Superfast Surcharge ₹" name="Superfast_Surcharge" value={form.Superfast_Surcharge} onChange={handleChange} type="number" placeholder="Optional" />
+              <Field label="Catering Charge ₹" name="Catering_Charge" value={form.Catering_Charge} onChange={handleChange} type="number" placeholder="Optional" />
+            </FormRow>
+
             <FormDivider label="Validity" />
 
             <FormRow cols={2}>
@@ -405,6 +429,42 @@ export default function FaresPage() {
               submitLabel={modal === 'create' ? 'Create Fare Rule' : 'Save Changes'}
               accent="var(--accent-rose)"
             />
+          </div>
+        </Modal>
+      )}
+
+      {/* ── View Modal ── */}
+      {modal === 'view' && editRow && (
+        <Modal title="👁 Fare Rule Details" onClose={() => setModal(null)} width={560}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontFamily: "'Inter', sans-serif", color: 'var(--text-secondary)', fontSize: 13 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, background: 'var(--bg-inset)', padding: 16, borderRadius: 8 }}>
+              <div style={{ gridColumn: '1 / -1' }}><strong style={{ color: 'var(--text-primary)' }}>Train:</strong> {getLookupLabel(editRow.Train)}</div>
+              <div style={{ gridColumn: '1 / -1' }}><strong style={{ color: 'var(--text-primary)' }}>From Station:</strong> {getLookupLabel(editRow.From_Station)}</div>
+              <div style={{ gridColumn: '1 / -1' }}><strong style={{ color: 'var(--text-primary)' }}>To Station:</strong> {getLookupLabel(editRow.To_Station)}</div>
+              
+              <div><strong style={{ color: 'var(--text-primary)' }}>Class:</strong> {editRow.Class}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Distance:</strong> {editRow.Distance_KM ? `${editRow.Distance_KM} km` : '—'}</div>
+              
+              <div><strong style={{ color: 'var(--text-primary)' }}>Base Fare:</strong> ₹{editRow.Base_Fare}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Dynamic Fare:</strong> ₹{editRow.Dynamic_Fare || '—'}</div>
+              
+              <div><strong style={{ color: 'var(--text-primary)' }}>Concession Type:</strong> {editRow.Concession_Type || 'General'}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Discount %:</strong> {editRow.Concession_Percent || '0'}%</div>
+              
+              <div><strong style={{ color: 'var(--text-primary)' }}>Effective From:</strong> {editRow.Effective_From ? editRow.Effective_From.split(' ')[0] : '—'}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Effective To:</strong> {editRow.Effective_To ? editRow.Effective_To.split(' ')[0] : 'Ongoing'}</div>
+
+              <div><strong style={{ color: 'var(--text-primary)' }}>GST:</strong> {editRow.GST_Percentage || '5'}%</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Tatkal Premium:</strong> {editRow.Tatkal_Premium_Percentage || '0'}%</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Superfast Surcharge:</strong> ₹{editRow.Superfast_Surcharge || '0'}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Catering Charge:</strong> ₹{editRow.Catering_Charge || '0'}</div>
+
+              <div><strong style={{ color: 'var(--text-primary)' }}>Status:</strong> {editRow.Is_Active === true || editRow.Is_Active === 'true' ? 'Active' : 'Inactive'}</div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <Button variant="secondary" onClick={() => setModal(null)}>Close</Button>
+            </div>
           </div>
         </Modal>
       )}

@@ -8,9 +8,9 @@
  *  5. handleSubmit uses finally{} so setLoading always resets
  *  6. userData guard before sessionStorage.setItem
  */
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
-  trainsApi, bookingsApi, stationsApi, authApi, connectingTrainsApi,
+  trainsApi, bookingsApi, stationsApi, authApi, connectingTrainsApi, faresApi,
   extractRecords, getRecordId, extractTime,
 } from '../services/api';
 import { useApi } from '../hooks/useApi';
@@ -40,8 +40,8 @@ const IRCTC_QUOTAS = [
 const IRCTC_GENDERS = ['Male', 'Female', 'Transgender'];
 const IRCTC_BERTHS  = ['No Preference', 'Lower', 'Middle', 'Upper', 'Side Lower', 'Side Upper'];
 
-const CLASS_FARE_KEY  = { SL: 'Fare_SL', '3A': 'Fare_3A', '2A': 'Fare_2A', '1A': 'Fare_2A', CC: 'Fare_SL', EC: 'Fare_2A', '2S': 'Fare_SL', FC: 'Fare_2A' };
-const CLASS_SEATS_KEY = { SL: 'Total_Seats_SL', '3A': 'Total_Seats_3A', '2A': 'Total_Seats_2A', '1A': 'Total_Seats_2A', CC: 'Total_Seats_SL', EC: 'Total_Seats_2A', '2S': 'Total_Seats_SL', FC: 'Total_Seats_2A' };
+const CLASS_FARE_KEY  = { SL: 'Fare_SL', '3A': 'Fare_3A', '2A': 'Fare_2A', '1A': 'Fare_1A', CC: 'Fare_CC', EC: 'Fare_EC', '2S': 'Fare_2S', FC: 'Fare_1A' };
+const CLASS_SEATS_KEY = { SL: 'Total_Seats_SL', '3A': 'Total_Seats_3A', '2A': 'Total_Seats_2A', '1A': 'Total_Seats_1A', CC: 'Total_Seats_CC', EC: 'Total_Seats_CC', '2S': 'Total_Seats_SL', FC: 'Total_Seats_1A' };
 const TATKAL_CHARGE   = { SL: 100, '3A': 300, '2A': 400, '1A': 500, CC: 125, EC: 200, '2S': 10, FC: 400 };
 const CLASS_ALL_KEYS  = [
   ['SL', 'Fare_SL', 'Total_Seats_SL'],
@@ -97,17 +97,7 @@ function parseTrainDate(dateStr) {
   return null;
 }
 
-// ─── Fare calculator ──────────────────────────────────────────────────────────
-function calcFare(train, cls, quota, n) {
-  const base    = Number(train[CLASS_FARE_KEY[cls] || 'Fare_SL'] || 0);
-  const tatkal  = quota === 'TQ' ? (TATKAL_CHARGE[cls] || 100) : quota === 'PT' ? Math.round((TATKAL_CHARGE[cls] || 100) * 1.5) : 0;
-  const discount = quota === 'SS' ? Math.round(base * 0.40) : 0;
-  const eff  = base + tatkal - discount;
-  const sub  = eff * n;
-  const gst  = Math.round(sub * 0.05);
-  const fee  = 30;
-  return { base, tatkal, discount, eff, sub, gst, fee, total: sub + gst + fee };
-}
+// Removed client-side calcFare, we now use backend `/api/fares/calculate`
 
 // ─── Step progress bar ────────────────────────────────────────────────────────
 function StepBar({ step }) {
@@ -410,8 +400,11 @@ function PassengerForm({ train, searchForm, user, onBack, onProceed }) {
   const [cls,   setCls]   = useState(searchForm.seat_class || 'SL');
   const [quota, setQuota] = useState('GN');
   const [paxCount, setPaxCount] = useState(1);
-  const [passengers, setPassengers] = useState([{ name: user?.Full_Name || '', age: '', gender: 'Male', berthPref: 'No Preference' }]);
+  const [optCatering, setOptCatering] = useState(false);
+  const [passengers, setPassengers] = useState([{ name: user?.Full_Name || '', age: '', gender: 'Male', berthPref: 'No Preference', idCard: '' }]);
   const [errors, setErrors] = useState({});
+  const [fare, setFare] = useState({ total: 0, base_fare: 0, tatkal_premium: 0, concession_discount: 0, gst: 0, convenience_fee: 0, catering_charge: 0, superfast_charge: 0, reservation_charge: 0 });
+  const [loadingFare, setLoadingFare] = useState(false);
 
   const iS = { ...inputBase, padding: '9px 12px' };
   const lS = { ...labelBase, fontSize: 10 };
@@ -420,7 +413,7 @@ function PassengerForm({ train, searchForm, user, onBack, onProceed }) {
     const c = Number(n); setPaxCount(c);
     setPassengers(prev => {
       const a = [...prev];
-      while (a.length < c) a.push({ name: '', age: '', gender: 'Male', berthPref: 'No Preference' });
+      while (a.length < c) a.push({ name: '', age: '', gender: 'Male', berthPref: 'No Preference', idCard: '' });
       return a.slice(0, c);
     });
   };
@@ -429,7 +422,35 @@ function PassengerForm({ train, searchForm, user, onBack, onProceed }) {
     if (errors[`p_${i}_${f}`]) setErrors(e => ({ ...e, [`p_${i}_${f}`]: '' }));
   };
 
-  const fare = calcFare(train, cls, quota, paxCount);
+  // Fetch dynamic fare from backend whenever inputs change
+  useEffect(() => {
+    let active = true;
+    async function getFare() {
+        setLoadingFare(true);
+        try {
+            const trainId = getRecordId(train);
+            const req = {
+                train_id: trainId,
+                class: cls,
+                passenger_count: paxCount,
+                concession_type: quota === 'SS' ? 'Senior' : 'General',
+                journey_date: journeyDate,
+                quota: quota,
+                opt_catering: optCatering
+            };
+            const res = await faresApi.calculate(req);
+            if (active && res?.success && res?.data) {
+                setFare(res.data);
+            }
+        } catch(err) {
+            console.error('Error fetching fare:', err);
+        } finally {
+            if (active) setLoadingFare(false);
+        }
+    }
+    getFare();
+    return () => { active = false; };
+  }, [train, cls, paxCount, quota, journeyDate, optCatering]);
 
   const validate = () => {
     const e = {};
@@ -446,7 +467,7 @@ function PassengerForm({ train, searchForm, user, onBack, onProceed }) {
   const proceed = () => {
     const errs = validate();
     if (Object.keys(errs).length) { setErrors(errs); return; }
-    onProceed({ journeyDate, seatClass: cls, quota, passengers, passengerCount: paxCount, fare });
+    onProceed({ journeyDate, seatClass: cls, quota, optCatering, passengers, passengerCount: paxCount, fare });
   };
 
   return (
@@ -458,8 +479,10 @@ function PassengerForm({ train, searchForm, user, onBack, onProceed }) {
           <div style={{ fontSize: 11, fontFamily: MONO, color: '#3b82f6', marginTop: 1 }}>#{train.Train_Number || '—'} · {from} → {to}</div>
         </div>
         <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 11, color: '#6b7280', fontFamily: FONT }}>Fare / pax ({cls})</div>
-          <div style={{ fontSize: 19, fontWeight: 700, color: '#22c55e', fontFamily: FONT }}>₹{fare.eff}</div>
+          <div style={{ fontSize: 11, color: '#6b7280', fontFamily: FONT }}>Total Fare</div>
+          <div style={{ fontSize: 19, fontWeight: 700, color: '#22c55e', fontFamily: FONT }}>
+            {loadingFare ? <Spinner size={14} color="#22c55e" /> : `₹${fare.total || 0}`}
+          </div>
         </div>
       </div>
 
@@ -534,29 +557,43 @@ function PassengerForm({ train, searchForm, user, onBack, onProceed }) {
                   {IRCTC_BERTHS.map(b => <option key={b} value={b}>{b}</option>)}
                 </select>
               </div>
+              <div style={{ gridColumn: 'span 2' }}>
+                <label style={lS}>ID Card Number (Optional)</label>
+                <input value={p.idCard} maxLength={50} onChange={e => updatePax(i, 'idCard', e.target.value)}
+                  placeholder="Aadhar / PAN / Passport"
+                  style={{ ...iS, borderColor: '#1e2433' }} />
+              </div>
             </div>
           </div>
         ))}
       </div>
 
-      {/* Fare preview */}
       <div style={{ background: '#080b11', border: '1px solid #1e2433', borderRadius: 9, padding: '13px 16px', marginBottom: 20 }}>
         <div style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10, fontFamily: FONT }}>Fare Preview</div>
-        {[
-          [`Base (₹${fare.base} × ${paxCount})`, `₹${fare.base * paxCount}`, null],
-          quota === 'TQ' ? ['Tatkal surcharge', `+₹${fare.tatkal * paxCount}`, '#fbbf24'] : null,
-          quota === 'PT' ? ['Premium Tatkal',   `+₹${fare.tatkal * paxCount}`, '#fbbf24'] : null,
-          quota === 'SS' ? ['Senior discount (40%)', `-₹${fare.discount * paxCount}`, '#22c55e'] : null,
-          ['GST 5%',          `₹${fare.gst}`, null],
-          ['Convenience fee', `₹${fare.fee}`, null],
-        ].filter(Boolean).map(([l, v, c], idx) => (
-          <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: c || '#9ca3af', marginBottom: 5, fontFamily: FONT }}>
-            <span>{l}</span><span style={{ fontWeight: 600 }}>{v}</span>
-          </div>
-        ))}
-        <div style={{ borderTop: '1px solid #1e2433', paddingTop: 9, marginTop: 5, display: 'flex', justifyContent: 'space-between', fontSize: 16, fontWeight: 700, color: '#22c55e', fontFamily: FONT }}>
-          <span>Total</span><span>₹{fare.total}</span>
-        </div>
+        
+        {loadingFare ? (
+          <div style={{ padding: '20px 0', textAlign: 'center' }}><Spinner size={24} color="#3b82f6" /></div>
+        ) : (
+          <>
+            {[
+              [`Base (${paxCount} pax)`, `₹${fare.base_fare}`, null],
+              fare.reservation_charge > 0 ? ['Reservation Charge', `+₹${fare.reservation_charge}`, null] : null,
+              fare.superfast_charge > 0 ? ['Superfast Surcharge', `+₹${fare.superfast_charge}`, null] : null,
+              fare.tatkal_premium > 0 ? ['Tatkal Premium', `+₹${fare.tatkal_premium}`, '#fbbf24'] : null,
+              fare.concession_discount < 0 ? ['Senior Concession', `${fare.concession_discount}`, '#22c55e'] : null,
+              fare.catering_charge > 0 ? ['Catering', `+₹${fare.catering_charge}`, null] : null,
+              fare.gst > 0 ? ['GST 5%', `+₹${fare.gst}`, null] : null,
+              ['Convenience Fee', `+₹${fare.convenience_fee}`, null],
+            ].filter(Boolean).map(([l, v, c], idx) => (
+              <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: c || '#9ca3af', marginBottom: 5, fontFamily: FONT }}>
+                <span>{l}</span><span style={{ fontWeight: 600 }}>{v}</span>
+              </div>
+            ))}
+            <div style={{ borderTop: '1px solid #1e2433', paddingTop: 9, marginTop: 5, display: 'flex', justifyContent: 'space-between', fontSize: 16, fontWeight: 700, color: '#22c55e', fontFamily: FONT }}>
+              <span>Total</span><span>₹{fare.total}</span>
+            </div>
+          </>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: 10 }}>
@@ -690,16 +727,24 @@ function PaymentStep({ train, bookingData, onBack, onPay, paying }) {
       <div style={{ background: '#0e1117', border: '1px solid #1e2433', borderRadius: 10, padding: 18, position: 'sticky', top: 20 }}>
         <div style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 12, fontFamily: FONT }}>Fare Breakdown</div>
         {[
-          { label: `Base (₹${fare.base}×${passengerCount})`, val: `₹${fare.base * passengerCount}` },
-          fare.tatkal  > 0 ? { label: 'Tatkal surcharge', val: `+₹${fare.tatkal * passengerCount}`,   color: '#fbbf24' } : null,
-          fare.discount > 0 ? { label: 'Senior discount',  val: `-₹${fare.discount * passengerCount}`, color: '#22c55e' } : null,
-          { label: 'GST 5%',           val: `₹${fare.gst}` },
-          { label: 'Convenience Fee',  val: `₹${fare.fee}` },
-        ].filter(Boolean).map(r => (
-          <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 7, fontSize: 12, color: r.color || '#9ca3af', fontFamily: FONT }}>
-            <span>{r.label}</span><span style={{ fontWeight: 600 }}>{r.val}</span>
-          </div>
-        ))}
+          [`Base (${passengerCount} pax)`, `₹${fare.base_fare}`, null],
+          fare.reservation_charge > 0 ? ['Reservation Charge', `+₹${fare.reservation_charge}`, null] : null,
+          fare.superfast_charge > 0 ? ['Superfast Surcharge', `+₹${fare.superfast_charge}`, null] : null,
+          fare.tatkal_premium > 0 ? ['Tatkal Premium', `+₹${fare.tatkal_premium}`, '#fbbf24'] : null,
+          fare.concession_discount < 0 ? ['Senior Concession', `${fare.concession_discount}`, '#22c55e'] : null,
+          fare.catering_charge > 0 ? ['Catering', `+₹${fare.catering_charge}`, null] : null,
+          fare.gst > 0 ? ['GST 5%', `+₹${fare.gst}`, null] : null,
+          ['Convenience Fee', `+₹${fare.convenience_fee}`, null],
+        ].filter(Boolean).map((r, i) => {
+          const l = Array.isArray(r) ? r[0] : r.label;
+          const v = Array.isArray(r) ? r[1] : r.val;
+          const c = Array.isArray(r) ? r[2] : r.color;
+          return (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 7, fontSize: 12, color: c || '#9ca3af', fontFamily: FONT }}>
+              <span>{l}</span><span style={{ fontWeight: 600 }}>{v}</span>
+            </div>
+          );
+        })}
         <div style={{ borderTop: '1px solid #1e2433', marginTop: 10, paddingTop: 10, display: 'flex', justifyContent: 'space-between', fontSize: 18, fontWeight: 700, color: '#22c55e', fontFamily: FONT }}>
           <span>Total</span><span>₹{fare.total}</span>
         </div>

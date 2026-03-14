@@ -23,6 +23,17 @@ export function getCurrentUser() {
   catch { return null; }
 }
 
+/** Read the Catalyst custom token stored after login. */
+export function getCatalystToken() {
+  return sessionStorage.getItem('catalyst_token') || null;
+}
+
+/** Save Catalyst token returned by the login endpoint. */
+export function setCatalystToken(token) {
+  if (token) sessionStorage.setItem('catalyst_token', token);
+  else sessionStorage.removeItem('catalyst_token');
+}
+
 /**
  * Returns true if the current session user is an admin.
  * admin@admin.com is ALWAYS admin regardless of Role field.
@@ -50,6 +61,17 @@ const client = axios.create({
   baseURL: BASE_URL,
   timeout: 20000,
   headers: { 'Content-Type': 'application/json' },
+});
+
+// Inject Catalyst token into every request automatically.
+// Catalyst's gateway reads the Authorization header to validate cross-domain
+// requests — this is what resolves CORS between Slate and AppSail.
+client.interceptors.request.use((config) => {
+  const token = getCatalystToken();
+  if (token) {
+    config.headers['Authorization'] = `Bearer ${token}`;
+  }
+  return config;
 });
 
 client.interceptors.response.use(
@@ -197,6 +219,8 @@ export const stationsApi = {
   create: (data) => client.post('/stations', data, { headers: adminHeaders() }),
   update: (id, data) => client.put(`/stations/${id}`, data, { headers: adminHeaders() }),
   delete: (id) => client.delete(`/stations/${id}`, { headers: adminHeaders() }),
+  bulkCreate: (stations) => client.post('/stations/bulk', { stations }, { headers: adminHeaders() }),
+  manifest: (id, date) => client.get(`/stations/${id}/manifest`, { params: { date }, headers: adminHeaders() }),
 };
 
 // Trains — admin protected writes
@@ -207,6 +231,10 @@ export const trainsApi = {
   update: (id, data) => client.put(`/trains/${id}`, data, { headers: adminHeaders() }),
   delete: (id) => client.delete(`/trains/${id}`, { headers: adminHeaders() }),
   searchByStation: (code, date) => client.get('/trains/search-by-station', { params: { station_code: code, journey_date: date } }),
+  getRunningStatus: (id) => client.get(`/trains/${id}/running-status`),
+  updateRunningStatus: (id, data) => client.put(`/trains/${id}/running-status`, data, { headers: adminHeaders() }),
+  cancelOnDate: (id, data) => client.post(`/trains/${id}/cancel-on-date`, data, { headers: adminHeaders() }),
+  bulkCreate: (trains) => client.post('/trains/bulk', { trains }, { headers: adminHeaders() }),
 };
 
 // Users — admin protected writes
@@ -216,6 +244,8 @@ export const usersApi = {
   create: (data) => client.post('/users', data, { headers: adminHeaders() }),
   update: (id, data) => client.put(`/users/${id}`, data, { headers: adminHeaders() }),
   delete: (id) => client.delete(`/users/${id}`, { headers: adminHeaders() }),
+  updateProfile: (id, data) => client.put(`/users/${id}/profile`, data),
+  updateStatus: (id, data) => client.put(`/users/${id}/status`, data, { headers: adminHeaders() }),
 };
 
 // Bookings — mixed: passengers create/cancel own; admin sees all
@@ -229,6 +259,9 @@ export const bookingsApi = {
   markPaid: (id) => client.post(`/bookings/${id}/paid`, {}, { headers: adminHeaders() }),
   cancel: (id, data = {}) => client.post(`/bookings/${id}/cancel`, data),
   getByPNR: (pnr) => client.get(`/bookings/pnr/${pnr}`),
+  getTicket: (id) => client.get(`/bookings/${id}/ticket`),
+  partialCancel: (id, passengerIndices) => client.post(`/bookings/${id}/partial-cancel`, { passenger_indices: passengerIndices }),
+  chart: (params) => client.get('/bookings/chart', { params, headers: adminHeaders() }),
 };
 
 // Settings — admin only
@@ -245,6 +278,9 @@ export const authApi = {
   login: (data) => client.post('/auth/login', data),
   register: (data) => client.post('/auth/register', data),
   setupAdmin: (data) => client.post('/auth/setup-admin', data),
+  changePassword: (data) => client.post('/auth/change-password', data),
+  forgotPassword: (data) => client.post('/auth/forgot-password', data),
+  resetPassword: (data) => client.post('/auth/reset-password', data),
 };
 
 // Fares — admin protected writes
@@ -358,6 +394,77 @@ export const trainRoutesApi = {
   // Connection queries
   connections: (stationCode) => client.get('/train-routes/connections', { params: { station_code: stationCode } }),
   allConnections: () => client.get('/train-routes/connections/all'),
+};
+
+// ── IRCTC Replica Extensions ──────────────────────────────────────────────────
+
+// Quotas — public read, admin writes
+export const quotasApi = {
+  getAll: (params) => client.get('/quotas', { params }),
+  getById: (id) => client.get(`/quotas/${id}`),
+  create: (data) => client.post('/quotas', data, { headers: adminHeaders() }),
+  update: (id, data) => client.put(`/quotas/${id}`, data, { headers: adminHeaders() }),
+  delete: (id) => client.delete(`/quotas/${id}`, { headers: adminHeaders() }),
+};
+
+// Coach Layouts — public read, admin protected writes
+export const coachApi = {
+  getAll: (params) => client.get('/coach-layouts', { params }),
+  getById: (id) => client.get(`/coach-layouts/${id}`),
+  create: (data) => client.post('/coach-layouts', data, { headers: adminHeaders() }),
+  update: (id, data) => client.put(`/coach-layouts/${id}`, data, { headers: adminHeaders() }),
+  delete: (id) => client.delete(`/coach-layouts/${id}`, { headers: adminHeaders() }),
+};
+
+// Train Inventory (Daily Ledger) — admin protected writes
+export const inventoryApi = {
+  getAll: (params) => client.get('/inventory', { params, headers: adminHeaders() }),
+  getById: (id) => client.get(`/inventory/${id}`, { headers: adminHeaders() }),
+  create: (data) => client.post('/inventory', data, { headers: adminHeaders() }),
+  update: (id, data) => client.put(`/inventory/${id}`, data, { headers: adminHeaders() }),
+  delete: (id) => client.delete(`/inventory/${id}`, { headers: adminHeaders() }),
+};
+
+// Announcements — public read, admin writes
+export const announcementsApi = {
+  getAll: (params) => client.get('/announcements', { params }),
+  getActive: () => client.get('/announcements/active'),
+  getById: (id) => client.get(`/announcements/${id}`),
+  create: (data) => client.post('/announcements', data, { headers: adminHeaders() }),
+  update: (id, data) => client.put(`/announcements/${id}`, data, { headers: adminHeaders() }),
+  delete: (id) => client.delete(`/announcements/${id}`, { headers: adminHeaders() }),
+};
+
+// Admin Reports — admin only
+export const reportsApi = {
+  revenue: (params) => client.get('/reports/revenue', { params, headers: adminHeaders() }),
+  occupancy: (params) => client.get('/reports/occupancy', { params, headers: adminHeaders() }),
+};
+
+// Admin Logs — admin only
+export const adminLogsApi = {
+  getAll: (params) => client.get('/admin/logs', { params, headers: adminHeaders() }),
+  create: (data) => client.post('/admin/logs', data, { headers: adminHeaders() }),
+};
+
+// MCP / System Exploration — admin only
+export const mcpApi = {
+  health: () => client.get('/health'),
+  debugConfig: () => client.get('/debug/config', { headers: adminHeaders() }),
+  systemInfo: () => client.get('/debug/system', { headers: adminHeaders() }),
+  testToken: () => client.get('/test/token', { headers: adminHeaders() }),
+  aiTranslate: (query) => client.post('/debug/ai-search', { query }, { headers: adminHeaders() }),
+  // Dynamically fetch any report by its alias via a unified backend proxy
+  fetchRawReport: (alias, params) => {
+    return client.get('/debug/raw', { 
+      params: { 
+        ...params,
+        report: alias 
+      }, 
+      headers: adminHeaders() 
+    });
+  },
+  systemLogs: (limit = 50) => client.get('/admin/logs', { params: { limit }, headers: adminHeaders() }),
 };
 
 export default client;

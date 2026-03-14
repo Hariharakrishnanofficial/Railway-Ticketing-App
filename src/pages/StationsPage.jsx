@@ -10,11 +10,24 @@ import { Field, Dropdown, FormRow, FormActions, FormApiError, DebugRecord } from
 // Station_Code, Station_Name, City, State, Zone, Station_Type, Latitude, Longitude
 
 const ZONE_OPTS = [
-  'Northern (NR)', 'North Central (NCR)', 'North Eastern (NER)', 'North Western (NWR)',
-  'Northeast Frontier (NFR)', 'Eastern (ER)', 'East Central (ECR)', 'East Coast (ECoR)',
-  'South Eastern (SER)', 'South East Central (SECR)', 'Southern (SR)', 'South Central (SCR)',
-  'South Western (SWR)', 'Western (WR)', 'West Central (WCR)', 'Central (CR)',
-  'Konkan (KR)', 'Metro Railway Kolkata (MR)',
+  { label: 'Central (CR)', value: 'CR' },
+  { label: 'Eastern (ER)', value: 'ER' },
+  { label: 'East Central (ECR)', value: 'ECR' },
+  { label: 'East Coast (ECoR)', value: 'ECoR' },
+  { label: 'Northern (NR)', value: 'NR' },
+  { label: 'North Central (NCR)', value: 'NCR' },
+  { label: 'North Eastern (NER)', value: 'NER' },
+  { label: 'North Western (NWR)', value: 'NWR' },
+  { label: 'Northeast Frontier (NFR)', value: 'NFR' },
+  { label: 'Southern (SR)', value: 'SR' },
+  { label: 'South Central (SCR)', value: 'SCR' },
+  { label: 'South Eastern (SER)', value: 'SER' },
+  { label: 'South East Central (SECR)', value: 'SECR' },
+  { label: 'South Western (SWR)', value: 'SWR' },
+  { label: 'Western (WR)', value: 'WR' },
+  { label: 'West Central (WCR)', value: 'WCR' },
+  { label: 'Metro Railway Kolkata (MR)', value: 'MR' },
+  { label: 'Konkan (KR)', value: 'KR' },
 ];
 
 const STATION_TYPE_OPTS = [
@@ -31,8 +44,9 @@ const COLUMNS = [
 ];
 
 const BLANK = {
-  Station_Code: '', Station_Name: '', City: '', State: '',
-  Zone: '', Station_Type: '', Latitude: '', Longitude: '',
+  Station_Code: '', Station_Name: '', City: '', State: '', Zone: '',
+  Station_Type: 'Junction', Latitude: '', Longitude: '',
+  Number_of_Platforms: '', Division: '', Is_Active: true,
 };
 
 function rowToForm(row) {
@@ -42,9 +56,12 @@ function rowToForm(row) {
     City:          row.City          ?? '',
     State:         row.State         ?? '',
     Zone:          row.Zone          ?? '',
-    Station_Type:  row.Station_Type  ?? '',
-    Latitude:      row.Latitude      ?? '',
-    Longitude:     row.Longitude     ?? '',
+    Station_Type: row.Station_Type || 'Junction',
+    Latitude:     row.Latitude     || '',
+    Longitude:    row.Longitude    || '',
+    Number_of_Platforms: row.Number_of_Platforms || '',
+    Division:     row.Division     || '',
+    Is_Active:    row.Is_Active !== undefined ? (row.Is_Active === true || row.Is_Active === 'true') : true,
   };
 }
 
@@ -83,6 +100,7 @@ export default function StationsPage() {
 
   const openCreate = () => { setForm(BLANK); setErrors({}); setEditRow(null); setApiErr(null); setModal('create'); };
   const openEdit   = row  => { setForm(rowToForm(row)); setErrors({}); setEditRow(row); setApiErr(null); setModal('edit'); };
+  const openView   = row  => { setEditRow(row); setModal('view'); };
 
   const handleSave = async () => {
     const e = validate(form);
@@ -95,13 +113,14 @@ export default function StationsPage() {
         Station_Name:  form.Station_Name.trim(),
         City:          form.City.trim(),
         State:         form.State.trim(),
-        Zone:          form.Zone.trim(),
-        Station_Type:  form.Station_Type.trim(),
-        Latitude:      form.Latitude  ? Number(form.Latitude)  : undefined,
-        Longitude:     form.Longitude ? Number(form.Longitude) : undefined,
+        Zone:          form.Zone,
+        Station_Type:  form.Station_Type,
+        Latitude:      form.Latitude  ? parseFloat(form.Latitude)  : null,
+        Longitude:     form.Longitude ? parseFloat(form.Longitude) : null,
+        Number_of_Platforms: form.Number_of_Platforms ? parseInt(form.Number_of_Platforms, 10) : null,
+        Division:      form.Division.trim() || "",
+        Is_Active:     form.Is_Active ? 'true' : 'false',
       };
-      // Remove undefined
-      Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
 
       const res = modal === 'create'
         ? await stationsApi.create(payload)
@@ -131,7 +150,7 @@ export default function StationsPage() {
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
           <Input icon="search" placeholder="Search by code, name, city, state…" value={search} onChange={e => setSearch(e.target.value)} style={{ maxWidth: 360 }} />
         </div>
-        <CRUDTable columns={COLUMNS} rows={filtered} loading={loading} onEdit={openEdit} onDelete={handleDelete} />
+        <CRUDTable columns={COLUMNS} rows={filtered} loading={loading} onView={openView} onEdit={openEdit} onDelete={handleDelete} />
         <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
           <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Showing {filtered.length} of {rows.length}</span>
         </div>
@@ -170,9 +189,27 @@ export default function StationsPage() {
             />
 
             <FormRow cols={2}>
-              <Field label="Latitude"  name="Latitude"  value={form.Latitude}  onChange={handleChange} type="number" placeholder="e.g. 13.0827" />
-              <Field label="Longitude" name="Longitude" value={form.Longitude} onChange={handleChange} type="number" placeholder="e.g. 80.2707" />
+              <Field label="Latitude"  name="Latitude"  value={form.Latitude}  onChange={handleChange} placeholder="e.g. 18.5204" mono />
+              <Field label="Longitude" name="Longitude" value={form.Longitude} onChange={handleChange} placeholder="e.g. 73.8567" mono />
             </FormRow>
+
+            <FormRow cols={2}>
+              <Field label="No. of Platforms"  name="Number_of_Platforms"  value={form.Number_of_Platforms}  onChange={handleChange} type="number" placeholder="e.g. 10" />
+              <Field label="Division"          name="Division"             value={form.Division}             onChange={handleChange} placeholder="e.g. Mumbai" />
+            </FormRow>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'var(--bg-inset)', borderRadius: 10 }}>
+              <input
+                type="checkbox"
+                id="station_is_active"
+                checked={form.Is_Active}
+                onChange={e => setForm(f => ({ ...f, Is_Active: e.target.checked }))}
+                style={{ width: 18, height: 18, accentColor: 'var(--accent-purple)' }}
+              />
+              <label htmlFor="station_is_active" style={{ fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                Active Station
+              </label>
+            </div>
 
             <FormApiError response={apiErr} />
             <DebugRecord row={editRow} />
@@ -183,6 +220,31 @@ export default function StationsPage() {
               submitLabel={modal === 'create' ? 'Create Station' : 'Save Changes'}
               accent="var(--accent-purple)"
             />
+          </div>
+        </Modal>
+      )}
+
+      {/* ── View Modal ── */}
+      {modal === 'view' && editRow && (
+        <Modal title={`👁 Station Details: ${editRow.Station_Name}`} onClose={() => setModal(null)} width={520}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontFamily: "'Inter', sans-serif", color: 'var(--text-secondary)', fontSize: 13 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, background: 'var(--bg-inset)', padding: 16, borderRadius: 8 }}>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Station Code:</strong> {editRow.Station_Code}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Station Name:</strong> {editRow.Station_Name}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>City:</strong> {editRow.City}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>State:</strong> {editRow.State}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Zone:</strong> {editRow.Zone || '—'}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Station Type:</strong> {editRow.Station_Type || '—'}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Latitude:</strong> {editRow.Latitude || '—'}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Longitude:</strong> {editRow.Longitude || '—'}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Platforms:</strong> {editRow.Number_of_Platforms || '—'}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Division:</strong> {editRow.Division || '—'}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Status:</strong> {editRow.Is_Active === 'true' || editRow.Is_Active === true ? 'Active' : 'Inactive'}</div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <Button variant="secondary" onClick={() => setModal(null)}>Close</Button>
+            </div>
           </div>
         </Modal>
       )}

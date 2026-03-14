@@ -24,6 +24,10 @@ import BookingsPage    from './pages/BookingsPage';
 import SettingsPage    from './pages/SettingsPage';
 import FaresPage       from './pages/FaresPage';
 import TrainRoutesPage from './pages/TrainRoutesPage';
+import AnnouncementsPage from './pages/AnnouncementsPage';
+import ReportsPage     from './pages/ReportsPage';
+import ReservationChartPage from './pages/ReservationChartPage';
+import ZohoExplorerPage     from './pages/ZohoExplorerPage';
 
 // Passenger pages
 import SearchPage      from './pages/SearchPage';
@@ -33,6 +37,9 @@ import MyBookings      from './pages/MyBookings';
 import TrainSchedule   from './pages/TrainSchedule';
 import ChartVacancy    from './pages/ChartVacancy';
 import PassengerHome   from './pages/PassengerHome';
+import ProfilePage     from './pages/ProfilePage';
+import ChangePasswordPage from './pages/ChangePasswordPage';
+import PassengerExplorerPage from './pages/PassengerExplorerPage';
 
 // ─── Role helper (exported for reuse) ────────────────────────────────────────
 // Admin access is granted to:
@@ -87,6 +94,11 @@ export default function App() {
               <Route path="/bookings"     element={<BookingsPage />} />
               <Route path="/fares"        element={<FaresPage />} />
               <Route path="/settings"     element={<SettingsPage />} />
+              <Route path="/announcements" element={<AnnouncementsPage />} />
+              <Route path="/reports"      element={<ReportsPage />} />
+              <Route path="/chart"        element={<ReservationChartPage />} />
+              <Route path="/zoho-explorer" element={<ZohoExplorerPage />} />
+              <Route path="/change-password" element={<ChangePasswordPage />} />
               <Route path="*"             element={<Navigate to="/" replace />} />
             </Routes>
           </AdminLayout>
@@ -108,6 +120,9 @@ export default function App() {
             <Route path="/chart-vacancy"  element={<ChartVacancy />} />
             <Route path="/my-bookings"    element={<MyBookings />} />
             <Route path="/cancel-ticket"  element={<CancelTicket />} />
+            <Route path="/profile"        element={<ProfilePage />} />
+            <Route path="/change-password" element={<ChangePasswordPage />} />
+            <Route path="/ai-assistant"   element={<PassengerExplorerPage user={user} />} />
             <Route path="*"               element={<Navigate to="/" replace />} />
           </Routes>
         </PassengerLayout>

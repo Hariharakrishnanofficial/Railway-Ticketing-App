@@ -7,7 +7,7 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import {
-  trainsApi, trainInfoApi,
+  trainsApi, trainInfoApi, coachApi,
   extractRecords, getRecordId,
 } from '../services/api';
 import { useToast } from '../context/ToastContext';
@@ -41,10 +41,20 @@ function availLabel(avail, total) {
 }
 
 // ─── Class row card ───────────────────────────────────────────────────────────
-function ClassCard({ cls, info }) {
+function ClassCard({ cls, info, layout }) {
   const { total, booked, available, fare, label } = info;
   const col = availColor(available, total);
   const p   = pct(available, total);
+
+  // Coach map toggle
+  const [showMap, setShowMap] = useState(false);
+  let parsedRule = {};
+  if (layout?.Coach_Configuration_Rule) {
+      try { parsedRule = JSON.parse(layout.Coach_Configuration_Rule); } catch { parsedRule = {}; }
+  } else {
+      // Fallback simple sequential if no rule
+      for(let i=1; i<=(layout?.Total_Seats || total); i++) parsedRule[i] = 'Seat';
+  }
 
   return (
     <div style={{
@@ -93,19 +103,45 @@ function ClassCard({ cls, info }) {
           { label: 'Total',    val: total     || '—', col: 'var(--text-muted)' },
           { label: 'Booked',   val: booked    || 0,   col: '#f87171' },
           { label: 'Available',val: available || 0,   col: col.fg   },
-        ].map(item => (
-          <div key={item.label}>
+          ...(info.rac > 0 ? [{ label: 'RAC', val: info.rac, col: '#f59e0b' }] : []),
+          ...(info.waitlist > 0 ? [{ label: 'Waitlist', val: info.waitlist, col: '#f87171' }] : []),
+        ].map((item, idx) => (
+          <div key={item.label + idx}>
             <div style={{ fontSize: 10, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.07em', fontFamily: FONT }}>{item.label}</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: item.col, fontFamily: MONO, lineHeight: 1.2 }}>{item.val}</div>
           </div>
         ))}
         {total > 0 && (
           <div style={{ marginLeft: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'flex-end' }}>
+             {layout && (
+                 <button onClick={() => setShowMap(!showMap)} 
+                         style={{ padding: '4px 10px', background: showMap ? '#2563eb' : 'transparent', border: '1px solid #2563eb', color: showMap ? '#fff' : '#60a5fa', borderRadius: 6, fontSize: 11, fontFamily: FONT, cursor: 'pointer', marginBottom: 4 }}>
+                     {showMap ? 'Hide Layout' : 'View Coach Layout'}
+                 </button>
+             )}
             <div style={{ fontSize: 10, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.07em', fontFamily: FONT }}>Occupied</div>
             <div style={{ fontSize: 22, fontWeight: 800, color: col.fg, fontFamily: MONO }}>{100 - p}%</div>
           </div>
         )}
       </div>
+
+      {/* Coach Layout visual map expansion */}
+      {showMap && layout && (
+          <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+              <div style={{ fontSize: 11, color: '#9ca3af', fontFamily: FONT, marginBottom: 10 }}>Standard {cls} Layout ({layout.Total_Seats} Berths)</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(65px, 1fr))', gap: 8 }}>
+                  {Array.from({length: layout.Total_Seats}, (_, i) => i + 1).map(seatNum => {
+                      const berthType = parsedRule[String(seatNum)] || parsedRule[seatNum] || 'Seat';
+                      return (
+                          <div key={seatNum} style={{ background: '#0a0d14', border: '1px solid #1e2433', borderRadius: 6, padding: '6px 4px', textAlign: 'center' }}>
+                              <div style={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0', fontFamily: MONO }}>{seatNum}</div>
+                              <div style={{ fontSize: 9, color: '#60a5fa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{berthType}</div>
+                          </div>
+                      );
+                  })}
+              </div>
+          </div>
+      )}
     </div>
   );
 }
@@ -142,6 +178,7 @@ export default function ChartVacancy() {
 
   const [trains, setTrains]       = useState([]);
   const [trainsLoading, setTL]    = useState(true);
+  const [layouts, setLayouts]     = useState([]);
   const [search, setSearch]       = useState('');
   const [date, setDate]           = useState(today());
   const [selected, setSelected]   = useState(null);
@@ -149,13 +186,18 @@ export default function ChartVacancy() {
   const [vacLoading, setVL]       = useState(false);
   const [trainMeta, setTrainMeta] = useState(null);
 
-  // Load trains
+  // Load trains and layouts
   useEffect(() => {
     setTL(true);
-    trainsApi.getAll({ limit: 500 })
+    const p1 = trainsApi.getAll({ limit: 500 })
       .then(res => setTrains(extractRecords(res)))
-      .catch(() => addToast('Could not load trains', 'error'))
-      .finally(() => setTL(false));
+      .catch(() => addToast('Could not load trains', 'error'));
+
+    const p2 = coachApi.getAll()
+      .then(res => setLayouts(extractRecords(res)))
+      .catch(() => console.error('Could not load coach layouts'));
+
+    Promise.allSettled([p1, p2]).finally(() => setTL(false));
   }, []);
 
   // Load vacancy when train or date changes
@@ -286,9 +328,10 @@ export default function ChartVacancy() {
               ) : (
                 <>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14 }}>
-                    {vacClasses.map(([cls, info]) => (
-                      <ClassCard key={cls} cls={cls} info={info} />
-                    ))}
+                    {vacClasses.map(([cls, info]) => {
+                      const lyt = layouts.find(l => String(l.Class).toUpperCase() === String(cls).toUpperCase() || l.Class?.display_value === cls);
+                      return <ClassCard key={cls} cls={cls} info={info} layout={lyt} />;
+                    })}
                   </div>
 
                   {/* Legend */}

@@ -8,7 +8,7 @@ import { Icon, Badge, EmptyState, SkeletonRow, ConfirmDialog } from './UI';
  */
 export default function CRUDTable({
   columns, rows, loading,
-  onEdit, onDelete, onConfirm, onMarkPaid,
+  onEdit, onDelete, onConfirm, onMarkPaid, onView,
   resolveValue,
 }) {
   const [confirm, setConfirm]           = useState(null); // { row, action: 'delete' | 'confirm' | 'paid' }
@@ -85,6 +85,9 @@ export default function CRUDTable({
                         )}
                         {onMarkPaid && (row.Payment_Status ?? row.payment_status) !== 'paid' && (
                           <ActionBtn onClick={() => setConfirm({ row, action: 'paid' })} icon="dollar" color="#60a5fa" bg="#0f1a2a" border="#3b82f630" title="Mark as paid" />
+                        )}
+                        {onView && (
+                          <ActionBtn onClick={() => onView(row)} icon="health" color="#c084fc" bg="#2d1b4e" border="#a855f730" title="View details" />
                         )}
                         <ActionBtn onClick={() => onEdit(row)} icon="edit" color="#60a5fa" bg="#0f1a2a" border="#3b82f630" title="Edit" />
                         <ActionBtn onClick={() => setConfirm({ row, action: 'delete' })} icon="trash" color="#f87171" bg="#2a0f0f" border="#ef444430" title="Delete" />

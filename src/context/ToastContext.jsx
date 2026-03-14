@@ -15,8 +15,16 @@ export function ToastProvider({ children }) {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  const contextValue = {
+    addToast,
+    success: (msg, dur) => addToast(msg, 'success', dur),
+    error: (msg, dur) => addToast(msg, 'error', dur),
+    warning: (msg, dur) => addToast(msg, 'warning', dur),
+    info: (msg, dur) => addToast(msg, 'info', dur),
+  };
+
   return (
-    <ToastContext.Provider value={{ addToast }}>
+    <ToastContext.Provider value={contextValue}>
       {children}
       <ToastContainer toasts={toasts} onRemove={removeToast} />
     </ToastContext.Provider>

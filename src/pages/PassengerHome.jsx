@@ -8,11 +8,11 @@ import { useNavigate } from 'react-router-dom';
 import { Icon } from '../components/UI';
 
 const CARDS = [
+  { path: '/ai-assistant',   icon: 'zap',     label: 'AI Assistant',   desc: 'AI-powered booking & logs',       color: '#10b981' },
   { path: '/search',         icon: 'search',  label: 'Search Trains',  desc: 'Find trains between stations',    color: '#f43f5e' },
   { path: '/my-bookings',    icon: 'ticket',  label: 'My Bookings',    desc: 'View all your bookings',          color: '#f59e0b' },
   { path: '/pnr-status',     icon: 'health',  label: 'PNR Status',     desc: 'Track your booking by PNR',       color: '#06b6d4' },
   { path: '/train-schedule', icon: 'map',     label: 'Train Schedule', desc: 'Check train timetables',          color: '#8b5cf6' },
-  // { path: '/chart-vacancy',  icon: 'seat',    label: 'Seat Chart',     desc: 'Check seat availability',         color: '#10b981' },
   { path: '/cancel-ticket',  icon: 'x',       label: 'Cancel Ticket',  desc: 'Cancel a booking & get refund',   color: '#f87171' },
 ];
 

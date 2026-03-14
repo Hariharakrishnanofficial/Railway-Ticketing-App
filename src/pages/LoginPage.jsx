@@ -58,10 +58,14 @@ export default function LoginPage({ onLogin }) {
   const [showPass, setShowPass] = useState(false);
   const [errors, setErrors]     = useState({});
 
+  const [fpStep, setFpStep]       = useState(1);
+  const [fpOtpSent, setFpOtpSent] = useState('');
+
   const [form, setForm] = useState({
     Full_Name: '', Email: '', Password: '',
     Phone_Number: '', Address: '',
     setup_key: '',
+    fpOtp: '', fpNewPwd: ''
   });
 
   const handleChange = (e) => {
@@ -71,15 +75,25 @@ export default function LoginPage({ onLogin }) {
   };
 
   function resetForm() {
-    setForm({ Full_Name: '', Email: '', Password: '', Phone_Number: '', Address: '', setup_key: '' });
+    setForm({ Full_Name: '', Email: '', Password: '', Phone_Number: '', Address: '', setup_key: '', fpOtp: '', fpNewPwd: '' });
     setErrors({});
     setShowPass(false);
+    setFpStep(1);
+    setFpOtpSent('');
   }
 
   function switchMode(m) { resetForm(); setMode(m); }
 
   function validate() {
     const e = {};
+    if (mode === 'forgot') {
+         if (!form.Email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.Email)) e.Email = 'Valid email required';
+         if (fpStep === 2) {
+             if (!form.fpOtp) e.fpOtp = 'OTP is required';
+             if (!form.fpNewPwd || form.fpNewPwd.length < 6) e.fpNewPwd = 'Minimum 6 characters';
+         }
+         return e;
+    }
     if (mode === 'register') {
       if (!form.Full_Name.trim()) e.Full_Name = 'Name is required';
     }
@@ -102,7 +116,46 @@ export default function LoginPage({ onLogin }) {
     return e;
   }
 
+  const handleForgotSendOTP = async (e) => {
+    e?.preventDefault();
+    const errs = validate();
+    if (errs.Email) { setErrors(errs); return; }
+    
+    setLoading(true);
+    try {
+      const res = await authApi.forgotPassword(form.Email);
+      addToast('OTP sent to your email (demo)', 'success');
+      setFpOtpSent(res.demo_otp || '123456');
+      setFpStep(2);
+    } catch (err) {
+      addToast(err.response?.data?.error || err.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResetPassword = async (e) => {
+    e?.preventDefault();
+    const errs = validate();
+    if (Object.keys(errs).length) { setErrors(errs); return; }
+
+    setLoading(true);
+    try {
+      await authApi.resetPassword({ email: form.Email, otp: form.fpOtp, new_password: form.fpNewPwd });
+      addToast('Password reset successfully! You can now log in.', 'success');
+      switchMode('login');
+    } catch (err) {
+      addToast(err.response?.data?.error || err.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSubmit = async () => {
+    if (mode === 'forgot') {
+        if (fpStep === 1) return handleForgotSendOTP();
+        return handleResetPassword();
+    }
     const errs = validate();
     if (Object.keys(errs).length) { setErrors(errs); return; }
 
@@ -113,7 +166,11 @@ export default function LoginPage({ onLogin }) {
         if (!res || res.success === false) {
           // Show field-level error for wrong password/email
           const msg = res?.error || res?.message || 'Invalid email or password';
-          setErrors({ Email: ' ', Password: msg });
+          if (msg.toLowerCase().includes('email') || msg.toLowerCase().includes('account')) {
+            setErrors({ Email: msg, Password: '' });
+          } else {
+            setErrors({ Email: '', Password: msg });
+          }
           return;
         }
 
@@ -122,6 +179,8 @@ export default function LoginPage({ onLogin }) {
           throw new Error('Unexpected server response. Please try again.');
 
         sessionStorage.setItem('rail_user', JSON.stringify(userData));
+        // Store Catalyst token — sent in Authorization header on all API calls
+        if (res?.catalyst_token) window.setCatalystToken?.(res.catalyst_token);
         addToast(`Welcome back, ${userData.Full_Name || userData.Email || 'User'}!`, 'success');
         onLogin?.(userData);
 
@@ -170,12 +229,13 @@ export default function LoginPage({ onLogin }) {
   };
 
   const isSetup      = mode === 'setup';
+  const isForgot     = mode === 'forgot';
   const accentColor  = isSetup ? '#ef4444' : '#3b82f6';
   const gradientBg   = isSetup ? 'linear-gradient(135deg, #ef4444, #dc2626)' : 'linear-gradient(135deg, #3b82f6, #8b5cf6)';
 
-  const TABS = isSetup
-    ? [{ key: 'login', label: 'Sign In' }, { key: 'setup', label: '🔑 Admin Setup' }]
-    : [{ key: 'login', label: 'Sign In' }, { key: 'register', label: 'Register' }];
+  let TABS = [{ key: 'login', label: 'Sign In' }, { key: 'register', label: 'Register' }];
+  if (isSetup) TABS = [{ key: 'login', label: 'Sign In' }, { key: 'setup', label: '🔑 Admin Setup' }];
+  if (isForgot) TABS = [{ key: 'login', label: 'Sign In' }, { key: 'forgot', label: 'Forgot Password' }];
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, fontFamily: 'var(--font-body)' }}>
@@ -195,7 +255,7 @@ export default function LoginPage({ onLogin }) {
             Railway System
           </h1>
           <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>
-            {mode === 'login' ? 'Sign in to continue' : mode === 'register' ? 'Create a passenger account' : 'Create or reset the admin account'}
+            {mode === 'login' ? 'Sign in to continue' : mode === 'register' ? 'Create a passenger account' : mode === 'forgot' ? 'Reset your password' : 'Create or reset the admin account'}
           </p>
         </div>
 
@@ -256,11 +316,29 @@ export default function LoginPage({ onLogin }) {
               </>
             )}
 
+            {isForgot && fpStep === 2 && (
+              <>
+                {fpOtpSent && (
+                  <div style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)', padding: '8px 12px', borderRadius: 8, color: '#4ade80', fontSize: 12 }}>
+                    <strong>Demo OTP:</strong> {fpOtpSent}
+                  </div>
+                )}
+                <AuthInput label="OTP" name="fpOtp" value={form.fpOtp} onChange={handleChange} icon="info" placeholder="Enter 6-digit OTP" error={errors.fpOtp} />
+                <AuthInput label="New Password" name="fpNewPwd" value={form.fpNewPwd} onChange={handleChange} icon="check" type="password" placeholder="New password" error={errors.fpNewPwd} />
+              </>
+            )}
+
             {/* Password with show/hide */}
+            {(mode === 'login' || mode === 'register' || mode === 'setup') && (
             <div>
-              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#4a5568', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
-                {isSetup ? 'New Admin Password' : 'Password'}
-              </label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: '#4a5568', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+                  {isSetup ? 'New Admin Password' : 'Password'}
+                </label>
+                {mode === 'login' && (
+                  <span onClick={() => switchMode('forgot')} style={{ fontSize: 11, color: 'var(--accent-blue)', cursor: 'pointer', fontWeight: 600 }}>Forgot?</span>
+                )}
+              </div>
               <div style={{ position: 'relative' }}>
                 <div style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#4a5568', pointerEvents: 'none' }}>
                   <Icon name="check" size={15} />
@@ -277,6 +355,7 @@ export default function LoginPage({ onLogin }) {
               </div>
               {errors.Password && <p style={{ margin: '5px 0 0', fontSize: 12, color: '#f87171' }}>{errors.Password}</p>}
             </div>
+            )}
 
             {(mode === 'register' || mode === 'setup') && (
               <>
@@ -299,13 +378,13 @@ export default function LoginPage({ onLogin }) {
               boxShadow: loading ? 'none' : `0 8px 28px ${accentColor}55`,
               transition: 'all 0.2s' }}>
             {loading
-              ? <><Spinner size={18} color="#94a3b8" />{mode === 'login' ? 'Signing in…' : mode === 'register' ? 'Creating account…' : 'Setting up admin…'}</>
-              : mode === 'login' ? 'Sign In' : mode === 'register' ? 'Create Account' : '🔑 Create Admin Account'
+              ? <><Spinner size={18} color="#94a3b8" />{mode === 'login' ? 'Signing in…' : mode === 'register' ? 'Creating account…' : mode === 'forgot' ? 'Processing…' : 'Setting up admin…'}</>
+              : (mode === 'login' ? 'Sign In' : mode === 'register' ? 'Create Account' : mode === 'forgot' ? (fpStep === 1 ? 'Send OTP' : 'Reset Password') : '🔑 Create Admin Account')
             }
           </button>
 
           {/* Footer text */}
-          {!isSetup && (
+          {!isSetup && !isForgot && (
             <p style={{ marginTop: 20, textAlign: 'center', fontSize: 12, color: '#4a5568' }}>
               {mode === 'login'
                 ? <>No account?{' '}<span onClick={() => switchMode('register')} style={{ color: 'var(--accent-blue)', cursor: 'pointer', fontWeight: 600 }}>Register here</span></>
@@ -330,7 +409,7 @@ export default function LoginPage({ onLogin }) {
           )}
 
           {/* Back link in setup mode */}
-          {isSetup && (
+          {(isSetup || isForgot) && (
             <p style={{ marginTop: 16, textAlign: 'center', fontSize: 12, color: '#4a5568' }}>
               <span onClick={() => switchMode('login')} style={{ color: 'var(--accent-blue)', cursor: 'pointer', fontWeight: 600 }}>
                 ← Back to Sign In

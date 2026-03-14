@@ -54,6 +54,8 @@ const BLANK = {
   Trains: '', Users: '', Journey_Date: '', Passenger_Count: '1',
   Class: 'SL', Total_Fare: '',
   Booking_Status: 'pending', Payment_Status: 'unpaid',
+  Boarding_Station: '', Deboarding_Station: '',
+  Quota: 'GN', Seat_Numbers: '', Coach_Number: '', Refund_Amount: '',
 };
 
 function resolveValue(row, key) {
@@ -81,6 +83,12 @@ function rowToForm(row) {
     Total_Fare:      row.Total_Fare     ?? '',
     Booking_Status:  (row.Booking_Status ?? 'pending').toLowerCase(),
     Payment_Status:  (row.Payment_Status ?? 'unpaid').toLowerCase(),
+    Boarding_Station: row.Boarding_Station ?? '',
+    Deboarding_Station: row.Deboarding_Station ?? '',
+    Quota:           row.Quota          ?? 'GN',
+    Seat_Numbers:    row.Seat_Numbers   ?? '',
+    Coach_Number:    row.Coach_Number   ?? '',
+    Refund_Amount:   row.Refund_Amount  ?? '',
   };
 }
 
@@ -171,6 +179,7 @@ export default function BookingsPage() {
 
   const openCreate = () => { setForm(BLANK); setErrors({}); setEditRow(null); setApiErr(null); setModal('create'); };
   const openEdit   = row  => { setForm(rowToForm(row)); setErrors({}); setEditRow(row); setApiErr(null); setModal('edit'); };
+  const openView   = row  => { setEditRow(row); setModal('view'); };
 
   const handleSave = async () => {
     const e = validate(form);
@@ -185,10 +194,13 @@ export default function BookingsPage() {
         // Journey_Date is date-only input ("YYYY-MM-DD") → convert to Zoho format
         Journey_Date: form.Journey_Date, 
         Passenger_Count: Number(form.Passenger_Count),
+        Boarding_Station: form.Boarding_Station,
+        Deboarding_Station: form.Deboarding_Station,
         Total_Fare:      form.Total_Fare ? Number(form.Total_Fare) : 0,
         Booking_Time:    nowZoho,
         Booking_Status:  form.Booking_Status || 'pending',
         Payment_Status:  form.Payment_Status || 'unpaid',
+        Quota:           form.Quota || 'GN',
         ...(modal === 'edit' && editRow?.PNR ? { PNR: editRow.PNR } : {}),
       };
       const res = modal === 'create'
@@ -272,6 +284,7 @@ export default function BookingsPage() {
           rows={filtered}
           loading={loading}
           resolveValue={resolveValue}
+          onView={openView}
           onEdit={openEdit}
           onDelete={handleDelete}
           onConfirm={handleConfirm}
@@ -317,15 +330,41 @@ export default function BookingsPage() {
             </FormRow>
 
             <FormRow cols={2}>
+              <Field
+                label="Boarding Station" name="Boarding_Station"
+                value={form.Boarding_Station} onChange={handleChange}
+                placeholder="Station Code"
+              />
+              <Field
+                label="Deboarding Station" name="Deboarding_Station"
+                value={form.Deboarding_Station} onChange={handleChange}
+                placeholder="Station Code"
+              />
+            </FormRow>
+
+            <FormRow cols={2}>
               <Dropdown
                 label="Seat Class" name="Class"
                 value={form.Class} onChange={handleChange}
                 options={CLASS_OPTS} placeholder={false} required
               />
+              <Dropdown
+                label="Quota" name="Quota"
+                value={form.Quota} onChange={handleChange}
+                options={[{value:'GN', label:'General'},{value:'TQ', label:'Tatkal'},{value:'LD', label:'Ladies'}]} placeholder={false}
+              />
+            </FormRow>
+
+            <FormRow cols={2}>
               <Field
                 label="Total Fare ₹" name="Total_Fare"
                 value={form.Total_Fare} onChange={handleChange}
                 type="number" placeholder="Auto-calculated"
+              />
+              <Field
+                label="Coach & Seats" name="Seat_Numbers"
+                value={form.Seat_Numbers} onChange={handleChange}
+                placeholder="e.g. B1-21, B1-22" mono
               />
             </FormRow>
 
@@ -352,6 +391,39 @@ export default function BookingsPage() {
               submitLabel={modal === 'create' ? 'Create Booking' : 'Save Changes'}
               accent="var(--accent-amber)"
             />
+          </div>
+        </Modal>
+      )}
+
+      {/* ── View Modal ── */}
+      {modal === 'view' && editRow && (
+        <Modal title={`👁 Booking Details: ${editRow.PNR || 'N/A'}`} onClose={() => setModal(null)} width={640}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontFamily: "'Inter', sans-serif", color: 'var(--text-secondary)', fontSize: 13 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, background: 'var(--bg-inset)', padding: 16, borderRadius: 8 }}>
+              <div><strong style={{ color: 'var(--text-primary)' }}>PNR:</strong> {editRow.PNR || '—'}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Status:</strong> {editRow.Booking_Status}</div>
+              <div style={{ gridColumn: '1 / -1' }}><strong style={{ color: 'var(--text-primary)' }}>Passenger:</strong> {resolveValue(editRow, '_user')}</div>
+              <div style={{ gridColumn: '1 / -1' }}><strong style={{ color: 'var(--text-primary)' }}>Train:</strong> {resolveValue(editRow, '_train')}</div>
+              
+              <div><strong style={{ color: 'var(--text-primary)' }}>Journey Date:</strong> {displayZohoDate(editRow.Journey_Date)}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Class:</strong> {editRow.Class} ({editRow.Quota || 'GN'})</div>
+              
+              <div><strong style={{ color: 'var(--text-primary)' }}>Pax Count:</strong> {editRow.Passenger_Count}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Total Fare:</strong> ₹{editRow.Total_Fare}</div>
+              
+              <div><strong style={{ color: 'var(--text-primary)' }}>Boarding:</strong> {editRow.Boarding_Station || '—'}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Deboarding:</strong> {editRow.Deboarding_Station || '—'}</div>
+
+              <div><strong style={{ color: 'var(--text-primary)' }}>Coach/Seats:</strong> {editRow.Seat_Numbers || (editRow.Coach_Number ? `${editRow.Coach_Number} ...` : '—')}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Refund Amount:</strong> ₹{editRow.Refund_Amount || '0'}</div>
+
+              <div><strong style={{ color: 'var(--text-primary)' }}>Payment Status:</strong> {editRow.Payment_Status}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Booking Time:</strong> {editRow.Booking_Time ? String(editRow.Booking_Time) : '—'}</div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <Button variant="secondary" onClick={() => setModal(null)}>Close</Button>
+            </div>
           </div>
         </Modal>
       )}

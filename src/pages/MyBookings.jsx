@@ -28,19 +28,25 @@ function isUpcoming(booking) {
 }
 
 // IRCTC cancellation charge table
-function calcRefund(booking) {
+function calcRefund(booking, paxToCancelCount) {
   const journeyDate = parseDate(booking.Journey_Date);
-  if (!journeyDate) return { charge: 0, refund: Number(booking.Total_Fare || 0), rule: 'No date info' };
-  const totalFare = Number(booking.Total_Fare || 0);
+  const totalPax = Math.max(1, Number(booking.Passenger_Count || 1));
+  const paxCount = paxToCancelCount || totalPax;
+
+  const farePerPax = Number(booking.Total_Fare || 0) / totalPax;
+  const fareToCancel = farePerPax * paxCount;
+
+  if (!journeyDate) return { charge: 0, refund: fareToCancel, rule: 'No date info' };
   const hoursLeft = (new Date(journeyDate) - new Date()) / 3600000;
   const cls = booking.Class || '';
 
   const flatCharge = { '2AC': 200, '2A': 200, '3AC': 120, '3A': 120, 'Sleeper': 60, 'SL': 60, 'CC': 90 }[cls] || 60;
+  const totalFlatCharge = flatCharge * paxCount;
 
-  if (hoursLeft >= 48)       return { charge: flatCharge, refund: totalFare - flatCharge, rule: '>48h: flat fee' };
-  if (hoursLeft >= 12)       return { charge: Math.max(totalFare * 0.25, flatCharge), refund: totalFare - Math.max(totalFare * 0.25, flatCharge), rule: '12–48h: 25%' };
-  if (hoursLeft >= 4)        return { charge: Math.max(totalFare * 0.50, flatCharge), refund: totalFare - Math.max(totalFare * 0.50, flatCharge), rule: '4–12h: 50%' };
-  return { charge: totalFare, refund: 0, rule: '<4h: no refund' };
+  if (hoursLeft >= 48)       return { charge: totalFlatCharge, refund: fareToCancel - totalFlatCharge, rule: '>48h: flat fee' };
+  if (hoursLeft >= 12)       return { charge: Math.max(fareToCancel * 0.25, totalFlatCharge), refund: fareToCancel - Math.max(fareToCancel * 0.25, totalFlatCharge), rule: '12–48h: 25%' };
+  if (hoursLeft >= 4)        return { charge: Math.max(fareToCancel * 0.50, totalFlatCharge), refund: fareToCancel - Math.max(fareToCancel * 0.50, totalFlatCharge), rule: '4–12h: 50%' };
+  return { charge: fareToCancel, refund: 0, rule: '<4h: no refund' };
 }
 
 function BookingCard({ booking, onCancel, cancelling }) {
@@ -122,8 +128,8 @@ function BookingCard({ booking, onCancel, cancelling }) {
                   <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Passengers</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                     {pList.map((p, i) => (
-                      <div key={i} style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 12px', fontSize: 12 }}>
-                        <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{p.name}</span>
+                      <div key={i} style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 12px', fontSize: 12, opacity: p.status === 'Cancelled' ? 0.5 : 1 }}>
+                        <span style={{ fontWeight: 700, color: p.status === 'Cancelled' ? '#f87171' : 'var(--text-primary)' }}>{p.name} {p.status === 'Cancelled' ? '(Cancelled)' : ''}</span>
                         <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>{p.age}y · {p.gender}</span>
                         {p.berthPref && p.berthPref !== 'No Preference' && <span style={{ color: 'var(--accent-blue)', marginLeft: 6 }}>{p.berthPref}</span>}
                         {p.seat && <span style={{ color: '#4ade80', marginLeft: 6, fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 11 }}>🪑 {p.seat}</span>}
@@ -160,6 +166,17 @@ function BookingCard({ booking, onCancel, cancelling }) {
           {/* Actions */}
           {status !== 'cancelled' && (
             <div style={{ display: 'flex', gap: 10 }}>
+              {status === 'confirmed' && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    window.open(`${window.VITE_API_BASE_URL || 'http://127.0.0.1:4600/api'}/bookings/${id}/ticket`, '_blank');
+                  }}
+                  style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid #4ade8030', background: '#0a1a0f', color: '#4ade80', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-body)', display: 'flex', alignItems: 'center', gap: 6 }}
+                >
+                  <Icon name="document" size={14} /> Print Ticket
+                </button>
+              )}
               {canCancel && (
                 <button
                   onClick={(e) => { e.stopPropagation(); onCancel(booking); }}
@@ -186,19 +203,35 @@ function BookingCard({ booking, onCancel, cancelling }) {
 // ─── Cancel Confirmation Modal ────────────────────────────────────────────────
 function CancelModal({ booking, onConfirm, onClose, cancelling }) {
   if (!booking) return null;
-  const refundInfo = calcRefund(booking);
-  const refundAmt  = Math.max(0, Math.round(refundInfo.refund));
-  const charge     = Math.round(refundInfo.charge);
-  const totalFare  = Number(booking.Total_Fare || 0);
-  const pax        = booking.Passenger_Count || 1;
+  const [selectedPax, setSelectedPax] = useState([]);
 
   try {
     var pList = typeof booking.Passengers === 'string' ? JSON.parse(booking.Passengers) : (booking.Passengers || []);
   } catch { var pList = []; }
 
+  const activePax = pList.filter(p => !p.status || p.status.toLowerCase() !== 'cancelled');
+  const totalPax = Math.max(1, Number(booking.Passenger_Count || 1));
+  const isPartial = activePax.length > 0;
+  // If no pax selected yet, calculate for all active pax by default
+  const cancelCount = isPartial && selectedPax.length > 0 ? selectedPax.length : activePax.length || totalPax;
+
+  const refundInfo = calcRefund(booking, cancelCount);
+  const refundAmt  = Math.max(0, Math.round(refundInfo.refund));
+  const charge     = Math.round(refundInfo.charge);
+  const totalFare  = Number(booking.Total_Fare || 0);
+
   const hoursLeft  = booking.Journey_Date
     ? Math.max(0, Math.round((new Date(parseDate(booking.Journey_Date)) - new Date()) / 3600000))
     : null;
+
+  const handleConfirmClick = () => {
+    if (isPartial && selectedPax.length === 0) {
+      alert("Please select at least one passenger to cancel.");
+      return;
+    }
+    const isFull = !isPartial || selectedPax.length === activePax.length;
+    onConfirm(booking, refundAmt, isFull ? null : selectedPax);
+  };
 
   const iS = { background: 'var(--bg-inset)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', fontSize: 13 };
   const labelS = { fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 };
@@ -254,16 +287,24 @@ function CancelModal({ booking, onConfirm, onClose, cancelling }) {
           </div>
 
           {/* Passenger list */}
-          {pList.length > 0 && (
+          {activePax.length > 0 && (
             <div>
-              <div style={labelS}>Passengers Being Cancelled</div>
+              <div style={labelS}>Select Passengers to Cancel</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {pList.map((p, i) => (
-                  <div key={i} style={{ ...iS, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px' }}>
-                    <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{p.name}</span>
-                    <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{p.age}y · {p.gender}</span>
-                  </div>
-                ))}
+                {activePax.map((p, i) => {
+                  const isChecked = selectedPax.includes(p.name);
+                  return (
+                  <label key={i} style={{ ...iS, display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', cursor: 'pointer', background: isChecked ? 'rgba(239, 68, 68, 0.1)' : 'var(--bg-inset)', border: isChecked ? '1px solid #ef444450' : '1px solid var(--border)', transition: 'all 0.2s' }}>
+                    <input type="checkbox" checked={isChecked} onChange={(e) => {
+                        if (e.target.checked) setSelectedPax(prev => [...prev, p.name]);
+                        else setSelectedPax(prev => prev.filter(n => n !== p.name));
+                    }} style={{ width: 16, height: 16, accentColor: '#ef4444' }} />
+                    <div style={{ flex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{p.name}</span>
+                        <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{p.age}y · {p.gender}</span>
+                    </div>
+                  </label>
+                )})}
               </div>
             </div>
           )}
@@ -311,7 +352,7 @@ function CancelModal({ booking, onConfirm, onClose, cancelling }) {
             }}>
               Keep Ticket
             </button>
-            <button onClick={() => onConfirm(booking, refundAmt)} disabled={!!cancelling} style={{
+            <button onClick={handleConfirmClick} disabled={!!cancelling} style={{
               flex: 1, padding: '11px', borderRadius: 9, border: '1px solid #ef444440',
               background: cancelling ? '#1a0808' : '#2a0f0f', color: '#f87171', fontSize: 13, fontWeight: 700,
               cursor: cancelling ? 'not-allowed' : 'pointer', fontFamily: 'var(--font-body)',
@@ -370,19 +411,19 @@ export default function MyBookings() {
   const handleCancel = (booking) => setCancelTarget(booking);
 
   // Called when user clicks Confirm inside modal
-  const handleCancelConfirm = async (booking, refundAmt) => {
+  const handleCancelConfirm = async (booking, refundAmt, cancelPassengers) => {
     const id = getRecordId(booking);
     setCancelling(id);
     try {
-      const res = await bookingsApi.cancel(id, { Refund_Amount: refundAmt });
+      const payload = { Refund_Amount: refundAmt };
+      if (cancelPassengers) payload.Cancel_Passengers = cancelPassengers;
+
+      const res = await bookingsApi.cancel(id, payload);
       if (res?.success === false) throw new Error(res.error || res.message);
-      setBookings(prev => prev.map(b =>
-        getRecordId(b) === id
-          ? { ...b, Booking_Status: 'cancelled', Refund_Amount: refundAmt }
-          : b
-      ));
-      addToast(`Ticket ${booking.PNR} cancelled. Refund ₹${refundAmt} initiated.`, 'success');
+      
+      addToast(cancelPassengers ? `Partial cancellation successful. Refund ₹${refundAmt} initiated.` : `Ticket ${booking.PNR} cancelled. Refund ₹${refundAmt} initiated.`, 'success');
       setCancelTarget(null);
+      await loadBookings(); // Reload to get updated passenger statuses
     } catch (err) {
       addToast(err.message || 'Cancellation failed', 'error');
       await loadBookings();

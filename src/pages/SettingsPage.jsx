@@ -81,6 +81,7 @@ export default function SettingsPage() {
 
   const openCreate = () => { setForm(BLANK); setErrors({}); setEditRow(null); setApiErr(null); setModal('create'); };
   const openEdit   = row  => { setForm(rowToForm(row)); setErrors({}); setEditRow(row); setApiErr(null); setModal('edit'); };
+  const openView   = row  => { setEditRow(row); setModal('view'); };
 
   const handleSave = async () => {
     const e = validate(form);
@@ -92,7 +93,7 @@ export default function SettingsPage() {
         Key:         form.Key.trim(),
         Value:       form.Value.trim(),
         Description: form.Description.trim(),
-        Is_Active:   form.Is_Active,
+        Is_Active:   form.Is_Active ? 'true' : 'false',
       };
       const res = modal === 'create'
         ? await settingsApi.create(payload)
@@ -130,7 +131,7 @@ export default function SettingsPage() {
             {typeOptions.map(t => <option key={t} value={t}>{t}</option>)}
           </Select>
         </div>
-        <CRUDTable columns={COLUMNS} rows={filtered} loading={loading} resolveValue={resolveValue} onEdit={openEdit} onDelete={handleDelete} />
+        <CRUDTable columns={COLUMNS} rows={filtered} loading={loading} resolveValue={resolveValue} onView={openView} onEdit={openEdit} onDelete={handleDelete} />
         <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
           <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Showing {filtered.length} of {rows.length}</span>
         </div>
@@ -171,6 +172,25 @@ export default function SettingsPage() {
               submitLabel={modal === 'create' ? 'Create Setting' : 'Save Changes'}
               accent="var(--accent-green)"
             />
+          </div>
+        </Modal>
+      )}
+
+      {/* ── View Modal ── */}
+      {modal === 'view' && editRow && (
+        <Modal title={`👁 Setting Details: ${editRow.Key || editRow.Type_field}`} onClose={() => setModal(null)} width={480}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontFamily: "'Inter', sans-serif", color: 'var(--text-secondary)', fontSize: 13 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12, background: 'var(--bg-inset)', padding: 16, borderRadius: 8 }}>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Type:</strong> {editRow.Type_field}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Key:</strong> {editRow.Key || '—'}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Value:</strong> {editRow.Value}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Description:</strong> {editRow.Description || '—'}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Status:</strong> {editRow.Is_Active === true || editRow.Is_Active === 'true' ? 'Active' : 'Inactive'}</div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <Button variant="secondary" onClick={() => setModal(null)}>Close</Button>
+            </div>
           </div>
         </Modal>
       )}

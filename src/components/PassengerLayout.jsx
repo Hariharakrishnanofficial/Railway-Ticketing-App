@@ -11,22 +11,26 @@ const FONT = "'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif";
 
 const PASSENGER_NAV = [
   { path: '/',               label: 'Home',           icon: 'dashboard', end: true },
+  { path: '/ai-assistant',   label: 'AI Assistant',   icon: 'zap'                 },
   { path: '/search',         label: 'Search Trains',  icon: 'search'              },
   { path: '/my-bookings',    label: 'My Bookings',    icon: 'ticket'              },
   { path: '/train-schedule', label: 'Train Schedule', icon: 'map'                 },
-  // { path: '/chart-vacancy',  label: 'Seat Chart',     icon: 'seat'                },
   { path: '/pnr-status',     label: 'PNR Status',     icon: 'health'              },
   { path: '/cancel-ticket',  label: 'Cancel Ticket',  icon: 'x'                   },
+  { path: '/profile',        label: 'My Profile',     icon: 'users'               },
+  { path: '/change-password',label: 'Security',       icon: 'settings'            },
 ];
 
 const ACCENT = {
   '/':               '#06b6d4',
+  '/ai-assistant':   '#10b981',
   '/search':         '#f43f5e',
   '/my-bookings':    '#f59e0b',
   '/train-schedule': '#8b5cf6',
-  '/chart-vacancy':  '#10b981',
   '/pnr-status':     '#06b6d4',
   '/cancel-ticket':  '#f87171',
+  '/profile':        '#10b981',
+  '/change-password':'#64748b',
 };
 
 function Breadcrumb() {
@@ -36,6 +40,7 @@ function Breadcrumb() {
     search: 'Search Trains', 'pnr-status': 'PNR Status',
     'cancel-ticket': 'Cancel Ticket', 'my-bookings': 'My Bookings',
     'train-schedule': 'Train Schedule', 'chart-vacancy': 'Seat Chart',
+    'ai-assistant': 'AI Assistant Explorer',
   };
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>

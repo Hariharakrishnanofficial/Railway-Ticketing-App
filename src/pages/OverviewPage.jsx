@@ -185,16 +185,15 @@ export default function OverviewPage() {
       .catch(() => {});
   }, []);
 
-  // ── Derived stats
-  const totalRevenue = recentBk.reduce((s, b) => {
-    if ((b.Booking_Status || '').toLowerCase() === 'confirmed')
-      return s + Number(b.Total_Fare || 0);
-    return s;
-  }, 0);
-
-  const confirmed  = recentBk.filter(b => (b.Booking_Status || '').toLowerCase() === 'confirmed').length;
-  const pending    = recentBk.filter(b => (b.Booking_Status || '').toLowerCase() === 'pending').length;
-  const cancelled  = recentBk.filter(b => (b.Booking_Status || '').toLowerCase() === 'cancelled').length;
+  // ── Derived stats from backend
+  const totalRevenue = stats?.revenue_total || 0;
+  const revenueToday = stats?.revenue_today || 0;
+  const bkToday      = stats?.bookings_today || 0;
+  
+  const bd = stats?.bookings_by_status || {};
+  const confirmed  = bd['confirmed'] || 0;
+  const pending    = bd['pending'] || 0;
+  const cancelled  = bd['cancelled'] || 0;
   const totalBkNum = stats?.total_bookings || 0;
   const activeTrains = trainList.filter(t => String(t.Is_Active) !== 'false').length;
 
@@ -234,7 +233,8 @@ export default function OverviewPage() {
         <StatCard
           icon="booking"   iconColor="#fb923c" iconBg="rgba(251,146,60,0.18)"
           label="Total Bookings"  value={totalBkNum || '—'}
-          sub={totalRevenue > 0 ? `${fmtCurrency(totalRevenue)} revenue (recent)` : undefined}
+          sub={`${bkToday} bookings today`}
+          trend={bkToday > 0 ? bkToday : undefined}
           loading={statsLoading}
         />
       </div>
@@ -247,23 +247,28 @@ export default function OverviewPage() {
           <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 20, fontFamily: FONT, display: 'flex', alignItems: 'center', gap: 8 }}>
             <Icon name="booking" size={15} style={{ color: '#fb923c' }} />
             Booking Breakdown
-            <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-faint)', fontFamily: MONO }}>last 10 loaded</span>
+            <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-faint)', fontFamily: MONO }}>all time</span>
           </div>
-          {bkLoading ? (
+          {statsLoading ? (
             <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}><Spinner size={20} /></div>
           ) : (
             <>
-              <MiniBar label="Confirmed" count={confirmed}  total={recentBk.length} color="#22c55e" />
-              <MiniBar label="Pending"   count={pending}    total={recentBk.length} color="#f59e0b" />
-              <MiniBar label="Cancelled" count={cancelled}  total={recentBk.length} color="#f87171" />
+              <MiniBar label="Confirmed" count={confirmed}  total={totalBkNum} color="#22c55e" />
+              <MiniBar label="Pending"   count={pending}    total={totalBkNum} color="#f59e0b" />
+              <MiniBar label="Cancelled" count={cancelled}  total={totalBkNum} color="#f87171" />
 
               {/* Revenue box */}
               <div style={{ marginTop: 20, padding: '14px 16px', borderRadius: 12, background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)' }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: FONT }}>Confirmed Revenue</div>
-                <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--text-primary)', fontFamily: FONT, marginTop: 4 }}>
-                  {fmtCurrency(totalRevenue)}
+                <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: 4 }}>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--text-primary)', fontFamily: FONT }}>
+                    {fmtCurrency(totalRevenue)}
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#3b82f6', fontFamily: FONT, background: 'rgba(59,130,246,0.1)', padding: '2px 8px', borderRadius: 6 }}>
+                    + {fmtCurrency(revenueToday)} today
+                  </div>
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: FONT }}>from recent bookings</div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: FONT, marginTop: 4 }}>all-time total vs today</div>
               </div>
             </>
           )}

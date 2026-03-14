@@ -43,12 +43,32 @@ const BLANK = {
   Train_Number:'', Train_Name:'', Train_Type:'Express',
   From_Station:'', To_Station:'',
   Departure_Time:'', Arrival_Time:'',
-  Duration:'', Distance:'', Run_Days:'Daily', Is_Active:true,
+  Duration:'', Distance:'', Run_Days:'Daily', Is_Active:true, Pantry_Car_Available:false,
   Fare_SL:'', Fare_3A:'', Fare_2A:'', Fare_1A:'',
   Fare_CC:'', Fare_EC:'', Fare_2S:'',
   Total_Seats_SL:'', Total_Seats_3A:'', Total_Seats_2A:'',
   Total_Seats_1A:'', Total_Seats_CC:'',
+  Running_Status:'On Time', Delay_Minutes:'0',
 };
+
+// Array ↔ String helpers for Zoho multi-select
+function parseRunDays(val) {
+  if (!val) return 'Daily';
+  if (Array.isArray(val)) {
+    if (val.length === 7) return 'Daily';
+    if (val.length === 5 && !val.includes('Sat') && !val.includes('Sun')) return 'Mon,Tue,Wed,Thu,Fri';
+    if (val.length === 2 && val.includes('Sat') && val.includes('Sun')) return 'Sat,Sun';
+    return val.join(',');
+  }
+  return String(val);
+}
+
+function formatRunDays(str) {
+  if (!str || str === 'Daily') return ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  if (str === 'Mon,Tue,Wed,Thu,Fri') return ['Mon','Tue','Wed','Thu','Fri'];
+  if (str === 'Sat,Sun') return ['Sat','Sun'];
+  return str.split(',').map(s => s.trim());
+}
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 function getStation(field) {
@@ -68,8 +88,9 @@ function rowToForm(row) {
     Arrival_Time:   parseZohoDate(row.Arrival_Time),
     Duration:       row.Duration       ?? '',
     Distance:       row.Distance       ?? '',
-    Run_Days:       row.Run_Days       || 'Daily',
-    Is_Active:      row.Is_Active !== undefined ? (row.Is_Active === true || row.Is_Active === 'true') : true,
+    Run_Days:       parseRunDays(row.Run_Days),
+    Is_Active:      row.Is_Active === true || row.Is_Active === 'true',
+    Pantry_Car_Available: row.Pantry_Car_Available === true || row.Pantry_Car_Available === 'true',
     Fare_SL:        row.Fare_SL        ?? '',
     Fare_3A:        row.Fare_3A        ?? '',
     Fare_2A:        row.Fare_2A        ?? '',
@@ -82,11 +103,13 @@ function rowToForm(row) {
     Total_Seats_2A: row.Total_Seats_2A ?? '',
     Total_Seats_1A: row.Total_Seats_1A ?? '',
     Total_Seats_CC: row.Total_Seats_CC ?? '',
+    Running_Status: row.Running_Status || 'On Time',
+    Delay_Minutes:  row.Delay_Minutes  || '0',
   };
 }
 
 // ─── Inline Trains Table ───────────────────────────────────────────────────────
-function TrainsTable({ rows, loading, onEdit, onDelete, deleting }) {
+function TrainsTable({ rows, loading, onEdit, onDelete, onView, deleting }) {
   if (loading) {
     return (
       <div style={{ display:'flex', justifyContent:'center', padding:48 }}>
@@ -167,6 +190,21 @@ function TrainsTable({ rows, loading, onEdit, onDelete, deleting }) {
                 </td>
                 <td style={{ ...tdS, whiteSpace:'nowrap' }}>
                   <div style={{ display:'flex', gap:6 }}>
+                    {/* ── VIEW BUTTON ── */}
+                    <button
+                      onClick={() => onView(row)}
+                      title="View train details"
+                      style={{
+                        padding:'5px 12px', borderRadius:6, border:'1px solid #1e2433',
+                        background:'rgba(167,139,250,0.08)', color:'#c084fc',
+                        fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:FONT,
+                        transition:'all 0.15s',
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.background='rgba(167,139,250,0.18)'; e.currentTarget.style.borderColor='#a855f7'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background='rgba(167,139,250,0.08)'; e.currentTarget.style.borderColor='#1e2433'; }}
+                    >
+                      👁 View
+                    </button>
                     {/* ── EDIT BUTTON ── */}
                     <button
                       onClick={() => onEdit(row)}
@@ -213,7 +251,7 @@ function TrainsTable({ rows, loading, onEdit, onDelete, deleting }) {
 export default function TrainsPage() {
   const { addToast } = useToast();
   const [search,  setSearch]  = useState('');
-  const [modal,   setModal]   = useState(null); // null | 'create' | 'edit'
+  const [modal,   setModal]   = useState(null); // null | 'create' | 'edit' | 'view' | 'delete'
   const [editRow, setEditRow] = useState(null);
   const [form,    setForm]    = useState(BLANK);
   const [errors,  setErrors]  = useState({});
@@ -261,6 +299,8 @@ export default function TrainsPage() {
 
   const openCreate = () => { setForm(BLANK); setErrors({}); setEditRow(null); setApiErr(null); setModal('create'); };
   const openEdit   = row  => { setForm(rowToForm(row)); setErrors({}); setEditRow(row); setApiErr(null); setModal('edit'); };
+  const openView   = row  => { setEditRow(row); setModal('view'); };
+  const openDelete = row  => { setEditRow(row); setModal('delete'); };
 
   const handleSave = async () => {
     const e = validate(form);
@@ -277,8 +317,9 @@ export default function TrainsPage() {
         Arrival_Time:   toZohoDateTime(form.Arrival_Time),
         Duration:       form.Duration   || null,
         Distance:       form.Distance   || null,
-        Run_Days:       form.Run_Days   || 'Daily',
-        Is_Active:      form.Is_Active,
+        Run_Days:       formatRunDays(form.Run_Days),
+        Is_Active:      form.Is_Active ? 'true' : 'false',
+        Pantry_Car_Available: form.Pantry_Car_Available ? 'true' : 'false',
         Fare_SL:        form.Fare_SL    || 0,
         Fare_3A:        form.Fare_3A    || 0,
         Fare_2A:        form.Fare_2A    || 0,
@@ -291,7 +332,19 @@ export default function TrainsPage() {
         Total_Seats_2A: form.Total_Seats_2A || 0,
         Total_Seats_1A: form.Total_Seats_1A || 0,
         Total_Seats_CC: form.Total_Seats_CC || 0,
+        Running_Status: form.Running_Status || 'On Time',
+        Delay_Minutes:  form.Delay_Minutes  || 0,
       };
+
+      // Set initial available seats = total seats on creation
+      if (modal === 'create') {
+        payload.Available_Seats_SL = payload.Total_Seats_SL;
+        payload.Available_Seats_3A = payload.Total_Seats_3A;
+        payload.Available_Seats_2A = payload.Total_Seats_2A;
+        payload.Available_Seats_1A = payload.Total_Seats_1A;
+        payload.Available_Seats_CC = payload.Total_Seats_CC;
+      }
+
       const res = modal === 'create'
         ? await trainsApi.create(payload)
         : await trainsApi.update(getRecordId(editRow), payload);
@@ -306,10 +359,11 @@ export default function TrainsPage() {
     setSaving(false);
   };
 
-  const handleDelete = async row => {
-    const id = getRecordId(row);
-    if (!window.confirm(`Delete train "${row.Train_Name || row.Train_Number}"? This cannot be undone.`)) return;
+  const confirmDelete = async () => {
+    if (!editRow) return;
+    const id = getRecordId(editRow);
     setDeleting(id);
+    setModal(null);
     try {
       const res = await trainsApi.delete(id);
       if (res?.success === false) throw new Error(res.error || res.message);
@@ -360,7 +414,8 @@ export default function TrainsPage() {
           rows={filtered}
           loading={loading}
           onEdit={openEdit}
-          onDelete={handleDelete}
+          onDelete={openDelete}
+          onView={openView}
           deleting={deleting}
         />
 
@@ -421,15 +476,34 @@ export default function TrainsPage() {
                 onChange={handleChange} options={RUN_DAYS_OPTS} placeholder={false} />
             </FormRow>
 
+            {/* Running Status */}
+            <FormRow cols={2}>
+              <Dropdown label="Running Status" name="Running_Status" value={form.Running_Status}
+                onChange={handleChange} options={[{value:'On Time', label:'On Time'}, {value:'Delayed', label:'Delayed'}, {value:'Cancelled', label:'Cancelled'}]} placeholder={false} />
+              <Field label="Delay (Minutes)" name="Delay_Minutes" value={form.Delay_Minutes}
+                onChange={handleChange} type="number" placeholder="e.g. 15" />
+            </FormRow>
+
             {/* Active toggle */}
-            <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 14px', background:'var(--bg-inset)', borderRadius:10, border:'1px solid var(--border)' }}>
-              <input type="checkbox" id="train_is_active"
-                checked={form.Is_Active}
-                onChange={e => setForm(f => ({ ...f, Is_Active: e.target.checked }))}
-                style={{ width:18, height:18, accentColor:'var(--accent-blue)', cursor:'pointer' }} />
-              <label htmlFor="train_is_active" style={{ fontSize:13, color:'var(--text-secondary)', cursor:'pointer', fontFamily:FONT }}>
-                Active — train appears in passenger search results
-              </label>
+            <div style={{ display:'flex', alignItems:'center', gap:20, padding:'12px 16px', background:'var(--bg-inset)', borderRadius:10, border:'1px solid var(--border)' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <input type="checkbox" id="train_is_active"
+                  checked={form.Is_Active}
+                  onChange={e => setForm(f => ({ ...f, Is_Active: e.target.checked }))}
+                  style={{ width:18, height:18, accentColor:'var(--accent-blue)', cursor:'pointer' }} />
+                <label htmlFor="train_is_active" style={{ fontSize:13, color:'var(--text-primary)', cursor:'pointer', fontFamily:FONT, fontWeight:600 }}>
+                  Active
+                </label>
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <input type="checkbox" id="train_pantry"
+                  checked={form.Pantry_Car_Available}
+                  onChange={e => setForm(f => ({ ...f, Pantry_Car_Available: e.target.checked }))}
+                  style={{ width:18, height:18, accentColor:'var(--accent-blue)', cursor:'pointer' }} />
+                <label htmlFor="train_pantry" style={{ fontSize:13, color:'var(--text-primary)', cursor:'pointer', fontFamily:FONT, fontWeight:600 }}>
+                  Pantry Car Available
+                </label>
+              </div>
             </div>
 
             {/* Fares */}
@@ -465,6 +539,67 @@ export default function TrainsPage() {
               submitLabel={modal === 'create' ? 'Create Train' : 'Save Changes'}
               accent="var(--accent-blue)"
             />
+          </div>
+        </Modal>
+      )}
+
+      {/* ── View Modal ── */}
+      {modal === 'view' && editRow && (
+        <Modal title={`👁 Train Details: ${editRow.Train_Number} - ${editRow.Train_Name}`} onClose={() => setModal(null)} width={640}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontFamily: FONT, color: 'var(--text-secondary)', fontSize: 13 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, background: 'var(--bg-inset)', padding: 16, borderRadius: 8 }}>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Train Number:</strong> {editRow.Train_Number}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Train Name:</strong> {editRow.Train_Name}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Type:</strong> {editRow.Train_Type}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Status:</strong> {editRow.Is_Active === 'true' || editRow.Is_Active === true ? 'Active' : 'Inactive'}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>From Station:</strong> {getStation(editRow.From_Station)}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>To Station:</strong> {getStation(editRow.To_Station)}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Departure:</strong> {extractTime(editRow.Departure_Time)}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Arrival:</strong> {extractTime(editRow.Arrival_Time)}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Duration:</strong> {editRow.Duration || 'N/A'}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Distance:</strong> {editRow.Distance || 'N/A'} km</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Run Days:</strong> {Array.isArray(editRow.Run_Days) ? editRow.Run_Days.join(', ') : editRow.Run_Days}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Running Status:</strong> {editRow.Running_Status}</div>
+              <div><strong style={{ color: 'var(--text-primary)' }}>Pantry Car:</strong> {editRow.Pantry_Car_Available === 'true' || editRow.Pantry_Car_Available === true ? 'Yes' : 'No'}</div>
+            </div>
+
+            <h4 style={{ margin: '10px 0 0', color: 'var(--text-primary)' }}>Fares (₹)</h4>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, background: 'var(--bg-inset)', padding: 12, borderRadius: 8 }}>
+              <div><strong>1A:</strong> {editRow.Fare_1A || '—'}</div>
+              <div><strong>2A:</strong> {editRow.Fare_2A || '—'}</div>
+              <div><strong>3A:</strong> {editRow.Fare_3A || '—'}</div>
+              <div><strong>SL:</strong> {editRow.Fare_SL || '—'}</div>
+              <div><strong>CC:</strong> {editRow.Fare_CC || '—'}</div>
+              <div><strong>EC:</strong> {editRow.Fare_EC || '—'}</div>
+              <div><strong>2S:</strong> {editRow.Fare_2S || '—'}</div>
+            </div>
+
+            <h4 style={{ margin: '10px 0 0', color: 'var(--text-primary)' }}>Seat Capacities</h4>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, background: 'var(--bg-inset)', padding: 12, borderRadius: 8 }}>
+              <div><strong>1A:</strong> {editRow.Total_Seats_1A || '—'}</div>
+              <div><strong>2A:</strong> {editRow.Total_Seats_2A || '—'}</div>
+              <div><strong>3A:</strong> {editRow.Total_Seats_3A || '—'}</div>
+              <div><strong>SL:</strong> {editRow.Total_Seats_SL || '—'}</div>
+              <div><strong>CC:</strong> {editRow.Total_Seats_CC || '—'}</div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <Button variant="secondary" onClick={() => setModal(null)}>Close</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Delete Modal ── */}
+      {modal === 'delete' && editRow && (
+        <Modal title="⚠️ Confirm Deletion" onClose={() => setModal(null)} width={400}>
+          <div style={{ fontFamily: FONT, color: 'var(--text-secondary)', fontSize: 14 }}>
+            <p>Delete train "{editRow.Train_Name || editRow.Train_Number}"?</p>
+            <p style={{ fontSize: 13, marginTop: 8 }}>This cannot be undone.</p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 24 }}>
+              <Button variant="secondary" onClick={() => setModal(null)}>Cancel</Button>
+              <Button style={{ background: '#dc2626', color: '#fff', border: 'none' }} onClick={confirmDelete}>Delete Train</Button>
+            </div>
           </div>
         </Modal>
       )}
