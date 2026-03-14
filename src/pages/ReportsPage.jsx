@@ -1,261 +1,230 @@
 /**
- * ReportsPage.jsx — Admin revenue and occupancy reports
- * Enhanced with detail popups for drill-down analytics.
+ * ReportsPage — Admin analytics with AI-generated insights.
+ * Wired to /api/analytics/* and /api/ai/analyze.
  */
-import { useState } from 'react';
-import { reportsApi, displayZohoDate } from '../services/api';
-import { Card, PageHeader, Button, Spinner, EmptyState, Modal } from '../components/UI';
-import { Field } from '../components/FormFields';
-import { useToast } from '../context/ToastContext';
+import { useState, useEffect } from 'react';
+import { analyticsApi, aiApi } from '../services/api';
+
+const FONT  = "'Inter', system-ui, sans-serif";
+const BLUE  = '#2E5FB3'; const GREEN = '#16a34a'; const ORANGE = '#d97706';
+const GRAY  = '#6b7280'; const RED   = '#dc2626';
+
+const tabs = ['Overview', 'Trends', 'Top Trains', 'Routes', 'Revenue'];
+
+const BarRow = ({ label, value, max, color = BLUE, suffix = '' }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+    <div style={{ width: 90, fontSize: 12, color: '#9ca3af', textAlign: 'right', fontFamily: FONT,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
+    <div style={{ flex: 1, background: '#1e2433', borderRadius: 4, height: 20, overflow: 'hidden' }}>
+      <div style={{ width: `${max > 0 ? Math.min((value / max) * 100, 100) : 0}%`,
+                    height: '100%', background: color, borderRadius: 4, transition: 'width 0.7s ease' }} />
+    </div>
+    <div style={{ width: 70, fontSize: 12, color: '#e5e7eb', fontFamily: FONT, textAlign: 'right' }}>
+      {typeof value === 'number' ? value.toLocaleString() : value}{suffix}
+    </div>
+  </div>
+);
 
 export default function ReportsPage() {
-  const [tab, setTab] = useState('revenue');
-  const [loading, setLoading] = useState(false);
-  const [revenueData, setRevenueData] = useState(null);
-  const [occupancyData, setOccupancyData] = useState(null);
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
-  const [occDate, setOccDate] = useState('');
-  
-  // Detail Modal State
-  const [detailModal, setDetailModal] = useState(null); // { type: 'revenue'|'occupancy', title: string, rows: [] }
-  const [detailLoading, setDetailLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState('Overview');
+  const [data,      setData]      = useState({});
+  const [insight,   setInsight]   = useState('');
+  const [loading,   setLoading]   = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [trendDays, setTrendDays] = useState(30);
 
-  const toast = useToast();
+  useEffect(() => { loadTab(activeTab); }, [activeTab, trendDays]);
 
-  const loadRevenue = async () => {
+  async function loadTab(tab) {
     setLoading(true);
+    setInsight('');
     try {
-      const res = await reportsApi.revenue({ from: fromDate, to: toDate });
-      setRevenueData(res?.data || res);
-    } catch (e) { toast.error(e.message); }
+      let res;
+      if (tab === 'Overview')   res = await analyticsApi.overview();
+      else if (tab === 'Trends')     res = await analyticsApi.trends(trendDays);
+      else if (tab === 'Top Trains') res = await analyticsApi.topTrains(10);
+      else if (tab === 'Routes')     res = await analyticsApi.routes();
+      else if (tab === 'Revenue')    res = await analyticsApi.revenue();
+      setData(res?.data || res || {});
+    } catch { setData({}); }
     finally { setLoading(false); }
-  };
+  }
 
-  const loadOccupancy = async () => {
-    setLoading(true);
+  async function generateInsight() {
+    setAiLoading(true);
+    const typeMap = {
+      'Overview': 'overview', 'Trends': 'booking_trends',
+      'Top Trains': 'top_trains', 'Routes': 'routes', 'Revenue': 'revenue',
+    };
     try {
-      const res = await reportsApi.occupancy({ date: occDate });
-      setOccupancyData(res?.data || res);
-    } catch (e) { toast.error(e.message); }
-    finally { setLoading(false); }
-  };
+      const res = await aiApi.analyze(typeMap[activeTab] || 'overview', '', trendDays);
+      setInsight(res?.insight || 'No insight returned.');
+    } catch { setInsight('AI analysis unavailable. Check GEMINI_API_KEY.'); }
+    finally { setAiLoading(false); }
+  }
 
-  const openRevenueDetails = async (className) => {
-    setDetailLoading(true);
-    try {
-      // Fetch full details from backend
-      const res = await reportsApi.revenue({ from: fromDate, to: toDate, details: 'true' });
-      const allDetails = res?.data?.details || [];
-      const filtered = allDetails.filter(b => b.Class === className);
-      setDetailModal({
-        type: 'revenue',
-        title: `Revenue Details: ${className}`,
-        rows: filtered
-      });
-    } catch (e) { toast.error(e.message); }
-    finally { setDetailLoading(false); }
-  };
+  function renderContent() {
+    if (loading) return <div style={{ color: GRAY, fontSize: 14, padding: 20 }}>Loading…</div>;
 
-  const openOccupancyDetails = async (train) => {
-    setDetailLoading(true);
-    try {
-      const res = await reportsApi.occupancy({ date: occDate, details: 'true' });
-      const trainDetails = res?.data?.details?.[train.train_id] || [];
-      setDetailModal({
-        type: 'occupancy',
-        title: `Occupancy Details: ${train.train_number} - ${train.train_name}`,
-        rows: trainDetails
-      });
-    } catch (e) { toast.error(e.message); }
-    finally { setDetailLoading(false); }
-  };
+    if (activeTab === 'Overview') {
+      const d = data;
+      const rows = [
+        ['Total Bookings', d.total_bookings || 0, '#7c3aed'],
+        ['Confirmed', (d.bookings_by_status?.confirmed || 0), GREEN],
+        ['Cancelled', (d.bookings_by_status?.cancelled || 0), RED],
+        ['Waitlisted', (d.bookings_by_status?.waitlisted || 0), ORANGE],
+      ];
+      const max = Math.max(...rows.map(r => r[1]));
+      return (
+        <div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
+            {[
+              ['🎫 Bookings', d.total_bookings],
+              ['💰 Revenue', `₹${(d.revenue_total || 0).toLocaleString()}`],
+              ['📅 Today', d.bookings_today],
+            ].map(([l, v]) => (
+              <div key={l} style={{ background: '#0a0d14', borderRadius: 10, padding: '12px 16px', textAlign: 'center' }}>
+                <div style={{ fontSize: 20, fontWeight: 700, color: '#f9fafb' }}>{v ?? '—'}</div>
+                <div style={{ fontSize: 11, color: GRAY }}>{l}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#9ca3af', marginBottom: 10 }}>Booking Status Breakdown</div>
+          {rows.map(([label, value, color]) => (
+            <BarRow key={label} label={label} value={value} max={max} color={color} />
+          ))}
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#9ca3af', margin: '16px 0 10px' }}>Class Breakdown</div>
+          {Object.entries(d.bookings_by_class || {}).map(([cls, count]) => (
+            <BarRow key={cls} label={cls} value={count}
+                    max={Math.max(...Object.values(d.bookings_by_class || { x: 1 }))} color={BLUE} />
+          ))}
+        </div>
+      );
+    }
 
-  const tabStyle = (t) => ({
-    padding: '0.75rem 1.5rem',
-    cursor: 'pointer',
-    borderBottom: tab === t ? '3px solid var(--primary, #6366f1)' : '3px solid transparent',
-    fontWeight: tab === t ? 700 : 400,
-    color: tab === t ? 'var(--primary, #6366f1)' : 'inherit',
-    background: 'none',
-    border: 'none',
-    fontSize: '1rem',
-  });
+    if (activeTab === 'Trends') {
+      const daily = data.daily || {};
+      const sorted = Object.entries(daily).sort(([a], [b]) => a.localeCompare(b));
+      const maxConf = Math.max(...sorted.map(([, d]) => d.confirmed || 0), 1);
+      return (
+        <div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 16 }}>
+            <span style={{ fontSize: 13, color: GRAY }}>Show last:</span>
+            {[7, 14, 30, 60].map(d => (
+              <button key={d} onClick={() => setTrendDays(d)} style={{
+                padding: '4px 12px', borderRadius: 6, fontSize: 12, border: 'none', cursor: 'pointer',
+                background: trendDays === d ? BLUE : '#1e2433', color: trendDays === d ? '#fff' : GRAY,
+              }}>{d}d</button>
+            ))}
+          </div>
+          {sorted.slice(-trendDays).map(([date, d]) => (
+            <BarRow key={date} label={date.slice(5)} value={d.confirmed || 0} max={maxConf}
+                    color={GREEN} suffix={` (₹${Math.round(d.revenue || 0).toLocaleString()})`} />
+          ))}
+        </div>
+      );
+    }
+
+    if (activeTab === 'Top Trains') {
+      const trains = Array.isArray(data) ? data : [];
+      const max    = Math.max(...trains.map(t => t.count || 0), 1);
+      return (
+        <div>
+          {trains.map((t, i) => (
+            <div key={t.train_id} style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span style={{ fontSize: 13, color: '#f9fafb', fontFamily: FONT }}>
+                  <span style={{ color: i < 3 ? ORANGE : GRAY, marginRight: 6, fontWeight: 700 }}>#{i + 1}</span>
+                  {t.name || t.train_id}
+                </span>
+                <span style={{ fontSize: 12, color: GREEN }}>₹{(t.revenue || 0).toLocaleString()}</span>
+              </div>
+              <BarRow label={`${t.count} bookings`} value={t.count} max={max} color={BLUE} />
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    if (activeTab === 'Routes') {
+      const routes = Array.isArray(data) ? data : [];
+      const max    = Math.max(...routes.map(r => r.count || 0), 1);
+      return (
+        <div>
+          {routes.map(r => (
+            <BarRow key={r.route} label={r.route} value={r.count} max={max} color="#7c3aed" />
+          ))}
+        </div>
+      );
+    }
+
+    if (activeTab === 'Revenue') {
+      const byClass = data.revenue_by_class || {};
+      const max     = Math.max(...Object.values(byClass), 1);
+      return (
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#9ca3af', marginBottom: 12 }}>Revenue by Class</div>
+          {Object.entries(byClass).sort(([, a], [, b]) => b - a).map(([cls, rev]) => (
+            <BarRow key={cls} label={cls} value={rev} max={max} color={ORANGE} suffix=" ₹" />
+          ))}
+        </div>
+      );
+    }
+    return null;
+  }
 
   return (
-    <div>
-      <PageHeader title="Admin Reports" subtitle="Revenue and occupancy analytics" />
-
-      <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: '1.5rem' }}>
-        <button style={tabStyle('revenue')} onClick={() => setTab('revenue')}>Revenue Report</button>
-        <button style={tabStyle('occupancy')} onClick={() => setTab('occupancy')}>Occupancy Report</button>
+    <div style={{ fontFamily: FONT }}>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 22, fontWeight: 700, color: '#f9fafb' }}>Analytics & Reports</div>
+        <div style={{ fontSize: 13, color: GRAY, marginTop: 4 }}>Booking performance, trends, and AI-generated insights</div>
       </div>
 
-      {tab === 'revenue' && (
-        <div>
-          <Card style={{ marginBottom: '1rem' }}>
-            <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-              <Field label="From Date" type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} />
-              <Field label="To Date" type="date" value={toDate} onChange={e => setToDate(e.target.value)} />
-              <Button onClick={loadRevenue} disabled={loading}>{loading ? 'Loading...' : 'Generate Report'}</Button>
-            </div>
-          </Card>
+      {/* Tab bar */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid #1e2433', paddingBottom: 1 }}>
+        {tabs.map(tab => (
+          <button key={tab} onClick={() => setActiveTab(tab)} style={{
+            padding: '8px 16px', borderRadius: '8px 8px 0 0', border: 'none', cursor: 'pointer',
+            fontFamily: FONT, fontSize: 13, fontWeight: 500, transition: 'all 0.15s',
+            background: activeTab === tab ? BLUE : 'transparent',
+            color:      activeTab === tab ? '#fff' : GRAY,
+            borderBottom: activeTab === tab ? `2px solid ${BLUE}` : '2px solid transparent',
+          }}>
+            {tab}
+          </button>
+        ))}
+      </div>
 
-          {revenueData && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
-              <Card>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.8rem', opacity: 0.6 }}>Total Revenue</div>
-                  <div style={{ fontSize: '1.8rem', fontWeight: 700, color: 'var(--success, #22c55e)' }}>₹{(revenueData.total_revenue || 0).toLocaleString()}</div>
-                </div>
-              </Card>
-              <Card>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.8rem', opacity: 0.6 }}>Total Bookings</div>
-                  <div style={{ fontSize: '1.8rem', fontWeight: 700 }}>{revenueData.total_bookings || 0}</div>
-                </div>
-              </Card>
-              <Card>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.8rem', opacity: 0.6 }}>Total Passengers</div>
-                  <div style={{ fontSize: '1.8rem', fontWeight: 700 }}>{revenueData.total_passengers || 0}</div>
-                </div>
-              </Card>
-            </div>
-          )}
-
-          {revenueData?.by_class && (
-            <Card style={{ marginBottom: '1rem' }}>
-              <h3 style={{ margin: '0 0 1rem' }}>Revenue by Class <span style={{ fontSize: '0.75rem', fontWeight: 400, opacity: 0.6 }}>(Click row to see details)</span></h3>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                    <th style={{ textAlign: 'left', padding: '0.5rem' }}>Class</th>
-                    <th style={{ textAlign: 'right', padding: '0.5rem' }}>Revenue</th>
-                    <th style={{ textAlign: 'right', padding: '0.5rem' }}>Bookings</th>
-                    <th style={{ textAlign: 'right', padding: '0.5rem' }}>Passengers</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(revenueData.by_class).map(([cls, d]) => (
-                    <tr 
-                      key={cls} 
-                      onClick={() => openRevenueDetails(cls)}
-                      style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', cursor: 'pointer' }}
-                      className="hover-row"
-                    >
-                      <td style={{ padding: '0.5rem', fontWeight: 600, color: 'var(--primary)' }}>{cls}</td>
-                      <td style={{ padding: '0.5rem', textAlign: 'right' }}>₹{(d.revenue || 0).toLocaleString()}</td>
-                      <td style={{ padding: '0.5rem', textAlign: 'right' }}>{d.bookings || 0}</td>
-                      <td style={{ padding: '0.5rem', textAlign: 'right' }}>{d.passengers || 0}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </Card>
-          )}
+      {/* Main content */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 20 }}>
+        <div style={{ background: '#111827', border: '1px solid #1e2433', borderRadius: 12, padding: 20 }}>
+          {renderContent()}
         </div>
-      )}
 
-      {tab === 'occupancy' && (
-        <div>
-          <Card style={{ marginBottom: '1rem' }}>
-            <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-              <Field label="Date" type="date" value={occDate} onChange={e => setOccDate(e.target.value)} />
-              <Button onClick={loadOccupancy} disabled={loading}>{loading ? 'Loading...' : 'Load Occupancy'}</Button>
-            </div>
-          </Card>
-
-          {occupancyData?.trains?.length > 0 && (
-            <div style={{ display: 'grid', gap: '1rem' }}>
-              {occupancyData.trains.map(t => (
-                <Card 
-                  key={t.train_id} 
-                  onClick={() => openOccupancyDetails(t)}
-                  style={{ cursor: 'pointer', transition: 'transform 0.2s' }}
-                  className="hover-scale"
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                    <div>
-                      <h3 style={{ margin: 0, color: 'var(--primary)' }}>{t.train_name || t.train_number}</h3>
-                      <span style={{ fontSize: '0.8rem', opacity: 0.6 }}>{t.train_number}</span>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '1.5rem', fontWeight: 700, color: t.overall.occupancy_pct > 80 ? '#ef4444' : t.overall.occupancy_pct > 50 ? '#f59e0b' : '#22c55e' }}>
-                        {t.overall.occupancy_pct}%
-                      </div>
-                      <div style={{ fontSize: '0.75rem', opacity: 0.6 }}>{t.overall.total_booked}/{t.overall.total_capacity}</div>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                    {Object.entries(t.classes || {}).map(([cls, d]) => (
-                      <div key={cls} style={{ padding: '0.4rem 0.8rem', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', fontSize: '0.8rem' }}>
-                        <strong>{cls}</strong>: {d.booked}/{d.total} ({d.occupancy_pct}%)
-                      </div>
-                    ))}
-                  </div>
-                  <div style={{ marginTop: '0.75rem', fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 600 }}>Click to view passenger details →</div>
-                </Card>
-              ))}
-            </div>
-          )}
-
-          {occupancyData && (!occupancyData.trains || occupancyData.trains.length === 0) && (
-            <EmptyState message="No occupancy data available for this date" />
-          )}
+        {/* AI Insight panel */}
+        <div style={{ background: '#111827', border: '1px solid #1e2433', borderRadius: 12, padding: 20,
+                      display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 16 }}>🤖</span>
+            <span style={{ fontSize: 14, fontWeight: 600, color: '#f9fafb' }}>AI Insight</span>
+          </div>
+          <div style={{
+            flex: 1, background: '#0a0d14', borderRadius: 8, padding: 14,
+            color: '#d1d5db', fontSize: 12, lineHeight: 1.7, minHeight: 120,
+            whiteSpace: 'pre-wrap', overflowY: 'auto',
+          }}>
+            {insight || <span style={{ color: GRAY }}>Click Generate to get Gemini-powered analysis of this report.</span>}
+          </div>
+          <button onClick={generateInsight} disabled={aiLoading} style={{
+            padding: '8px 0', borderRadius: 8, border: 'none',
+            background: aiLoading ? '#1e2433' : BLUE,
+            color: aiLoading ? GRAY : '#fff', cursor: aiLoading ? 'not-allowed' : 'pointer',
+            fontSize: 13, fontFamily: FONT, fontWeight: 600,
+          }}>
+            {aiLoading ? '✨ Analyzing…' : '✨ Generate Insight'}
+          </button>
         </div>
-      )}
-
-      {detailModal && (
-        <Modal title={detailModal.title} onClose={() => setDetailModal(null)} width={800}>
-          <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
-            {detailModal.rows.length === 0 ? <EmptyState message="No records found" /> : (
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-inset)' }}>
-                    <th style={{ padding: '10px', textAlign: 'left' }}>PNR</th>
-                    <th style={{ padding: '10px', textAlign: 'left' }}>Date</th>
-                    <th style={{ padding: '10px', textAlign: 'left' }}>Passenger</th>
-                    <th style={{ padding: '10px', textAlign: 'right' }}>Fare</th>
-                    <th style={{ padding: '10px', textAlign: 'center' }}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {detailModal.rows.map((r, i) => (
-                    <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                      <td style={{ padding: '10px', fontFamily: 'monospace' }}>{r.PNR}</td>
-                      <td style={{ padding: '10px' }}>{displayZohoDate(r.Journey_Date)}</td>
-                      <td style={{ padding: '10px' }}>
-                        {typeof r.Users === 'object' ? r.Users.display_value : r.Users}
-                      </td>
-                      <td style={{ padding: '10px', textAlign: 'right' }}>₹{r.Total_Fare}</td>
-                      <td style={{ padding: '10px', textAlign: 'center' }}>
-                        <span style={{ 
-                          padding: '2px 8px', borderRadius: '10px', fontSize: '0.7rem',
-                          background: r.Booking_Status === 'confirmed' ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
-                          color: r.Booking_Status === 'confirmed' ? '#22c55e' : '#ef4444'
-                        }}>
-                          {r.Booking_Status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-          <div style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'flex-end' }}>
-            <Button variant="secondary" onClick={() => setDetailModal(null)}>Close</Button>
-          </div>
-        </Modal>
-      )}
-
-      {(loading || detailLoading) && <Spinner />}
-      
-      <style>{`
-        .hover-row:hover { background: rgba(99, 102, 241, 0.05); }
-        .hover-scale:hover { transform: translateY(-2px); border-color: var(--primary); }
-      `}</style>
+      </div>
     </div>
   );
 }

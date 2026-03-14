@@ -39,6 +39,7 @@ import ChartVacancy    from './pages/ChartVacancy';
 import PassengerHome   from './pages/PassengerHome';
 import ProfilePage     from './pages/ProfilePage';
 import ChangePasswordPage from './pages/ChangePasswordPage';
+import AIChatWidget    from './components/AIChatWidget';
 import PassengerExplorerPage from './pages/PassengerExplorerPage';
 
 // ─── Role helper (exported for reuse) ────────────────────────────────────────
@@ -78,11 +79,10 @@ export default function App() {
 
   const admin = isAdmin(user);
 
-  // Admin section
-  if (admin) {
-    return (
-      <BrowserRouter>
-        <ToastProvider>
+  return (
+    <BrowserRouter>
+      <ToastProvider>
+        {admin ? (
           <AdminLayout user={user} onLogout={handleLogout}>
             <Routes>
               <Route path="/"             element={<OverviewPage />} />
@@ -102,30 +102,24 @@ export default function App() {
               <Route path="*"             element={<Navigate to="/" replace />} />
             </Routes>
           </AdminLayout>
-        </ToastProvider>
-      </BrowserRouter>
-    );
-  }
-
-  // Passenger section
-  return (
-    <BrowserRouter>
-      <ToastProvider>
-        <PassengerLayout user={user} onLogout={handleLogout}>
-          <Routes>
-            <Route path="/"               element={<PassengerHome user={user} />} />
-            <Route path="/search"         element={<SearchPage />} />
-            <Route path="/pnr-status"     element={<PNRStatus />} />
-            <Route path="/train-schedule" element={<TrainSchedule />} />
-            <Route path="/chart-vacancy"  element={<ChartVacancy />} />
-            <Route path="/my-bookings"    element={<MyBookings />} />
-            <Route path="/cancel-ticket"  element={<CancelTicket />} />
-            <Route path="/profile"        element={<ProfilePage />} />
-            <Route path="/change-password" element={<ChangePasswordPage />} />
-            <Route path="/ai-assistant"   element={<PassengerExplorerPage user={user} />} />
-            <Route path="*"               element={<Navigate to="/" replace />} />
-          </Routes>
-        </PassengerLayout>
+        ) : (
+          <PassengerLayout user={user} onLogout={handleLogout}>
+            <Routes>
+              <Route path="/"               element={<PassengerHome user={user} />} />
+              <Route path="/search"         element={<SearchPage />} />
+              <Route path="/pnr-status"     element={<PNRStatus />} />
+              <Route path="/train-schedule" element={<TrainSchedule />} />
+              <Route path="/chart-vacancy"  element={<ChartVacancy />} />
+              <Route path="/my-bookings"    element={<MyBookings />} />
+              <Route path="/cancel-ticket"  element={<CancelTicket />} />
+              <Route path="/profile"        element={<ProfilePage />} />
+              <Route path="/change-password" element={<ChangePasswordPage />} />
+              <Route path="/ai-assistant"   element={<PassengerExplorerPage user={user} />} />
+              <Route path="*"               element={<Navigate to="/" replace />} />
+            </Routes>
+          </PassengerLayout>
+        )}
+        <AIChatWidget />
       </ToastProvider>
     </BrowserRouter>
   );

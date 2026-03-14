@@ -1,377 +1,214 @@
 /**
- * OverviewPage.jsx — Admin Dashboard
- * Live stats: trains, bookings, users, revenue
- * Recent bookings table + quick-action cards
- * Matches existing dark theme + Zoho data patterns
+ * OverviewPage — Admin dashboard with live analytics + AI insights.
+ * Uses /api/analytics/* endpoints and /api/ai/analyze for Gemini commentary.
  */
-import { useState, useEffect, useCallback } from 'react';
-import {
-  overviewApi, bookingsApi, trainsApi,
-  extractRecords, getRecordId,
-  displayZohoDate, displayZohoDateTime,
-} from '../services/api';
+import { useState, useEffect } from 'react';
+import { analyticsApi, aiApi } from '../services/api';
+import { PageHeader, Card, Spinner } from '../components/UI';
 import { useToast } from '../context/ToastContext';
-import { PageHeader, Card, Icon, Badge, Spinner } from '../components/UI';
 
-const FONT = "'Inter','Segoe UI',system-ui,-apple-system,sans-serif";
-const MONO = "'JetBrains Mono','Fira Code','Courier New',monospace";
+const FONT = "'Inter', system-ui, sans-serif";
+const BLUE = '#2E5FB3'; const GREEN = '#16a34a'; const ORANGE = '#d97706';
+const RED  = '#dc2626'; const GRAY  = '#6b7280';
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function getLookup(f) {
-  if (!f) return '—';
-  if (typeof f === 'object') return f.display_value || f.ID || '—';
-  return String(f);
-}
+const StatCard = ({ label, value, sub, color = BLUE, icon }) => (
+  <div style={{
+    background: '#111827', border: '1px solid #1e2433', borderRadius: 12,
+    padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 6,
+    borderTop: `3px solid ${color}`,
+  }}>
+    <div style={{ fontSize: 28, marginBottom: 2 }}>{icon}</div>
+    <div style={{ fontSize: 28, fontWeight: 700, color: '#f9fafb', fontFamily: FONT }}>{value}</div>
+    <div style={{ fontSize: 13, color: '#9ca3af', fontFamily: FONT }}>{label}</div>
+    {sub && <div style={{ fontSize: 11, color: color, fontWeight: 600 }}>{sub}</div>}
+  </div>
+);
 
-function fmtCurrency(n) {
-  const num = Number(n) || 0;
-  if (num >= 100000) return `₹${(num / 100000).toFixed(1)}L`;
-  if (num >= 1000)   return `₹${(num / 1000).toFixed(1)}K`;
-  return `₹${num.toLocaleString('en-IN')}`;
-}
-
-// ─── Stat Card ────────────────────────────────────────────────────────────────
-function StatCard({ icon, iconColor, iconBg, label, value, sub, loading, trend }) {
+const BarChart = ({ data, title, colorFn }) => {
+  if (!data || !Object.keys(data).length) return null;
+  const max = Math.max(...Object.values(data));
   return (
-    <div style={{
-      background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-      borderRadius: 14, padding: '20px 22px',
-      display: 'flex', flexDirection: 'column', gap: 12,
-      position: 'relative', overflow: 'hidden',
-    }}>
-      {/* Glow background */}
-      <div style={{
-        position: 'absolute', top: -20, right: -20,
-        width: 80, height: 80, borderRadius: '50%',
-        background: `${iconBg}30`, filter: 'blur(20px)',
-      }} />
-
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <div style={{
-          width: 42, height: 42, borderRadius: 12,
-          background: iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0,
-        }}>
-          <Icon name={icon} size={19} style={{ color: iconColor }} />
+    <div style={{ marginTop: 8 }}>
+      <div style={{ fontSize: 13, color: '#9ca3af', marginBottom: 10, fontFamily: FONT }}>{title}</div>
+      {Object.entries(data).map(([k, v]) => (
+        <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+          <div style={{ width: 60, fontSize: 11, color: '#9ca3af', textAlign: 'right', fontFamily: FONT }}>{k}</div>
+          <div style={{ flex: 1, background: '#1e2433', borderRadius: 4, height: 18, overflow: 'hidden' }}>
+            <div style={{
+              width: `${max > 0 ? (v / max) * 100 : 0}%`, height: '100%',
+              background: colorFn ? colorFn(k) : BLUE, borderRadius: 4,
+              transition: 'width 0.6s ease',
+            }} />
+          </div>
+          <div style={{ width: 32, fontSize: 11, color: '#e5e7eb', fontFamily: FONT }}>{v}</div>
         </div>
-        {trend !== undefined && (
-          <span style={{
-            fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 20,
-            background: trend >= 0 ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
-            color: trend >= 0 ? '#22c55e' : '#f87171',
-            fontFamily: FONT,
-          }}>
-            {trend >= 0 ? '▲' : '▼'} {Math.abs(trend)}%
-          </span>
-        )}
-      </div>
-
-      <div>
-        {loading ? (
-          <div style={{ height: 32, display: 'flex', alignItems: 'center' }}>
-            <Spinner size={18} color={iconColor} />
-          </div>
-        ) : (
-          <div style={{
-            fontSize: 28, fontWeight: 800, color: 'var(--text-primary)',
-            fontFamily: FONT, lineHeight: 1,
-          }}>
-            {value ?? '—'}
-          </div>
-        )}
-        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 5, fontFamily: FONT }}>
-          {label}
-        </div>
-        {sub && (
-          <div style={{ fontSize: 11, color: iconColor, marginTop: 4, fontWeight: 600, fontFamily: FONT }}>
-            {sub}
-          </div>
-        )}
-      </div>
+      ))}
     </div>
   );
-}
+};
 
-// ─── Mini progress bar ────────────────────────────────────────────────────────
-function MiniBar({ label, count, total, color }) {
-  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-        <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontFamily: FONT }}>{label}</span>
-        <span style={{ fontSize: 12, fontWeight: 700, color, fontFamily: MONO }}>{count} <span style={{ color: 'var(--text-faint)', fontWeight: 400 }}>({pct}%)</span></span>
-      </div>
-      <div style={{ height: 5, borderRadius: 10, background: '#1e2433', overflow: 'hidden' }}>
-        <div style={{ height: '100%', width: `${pct}%`, background: color, borderRadius: 10, transition: 'width 0.8s ease' }} />
-      </div>
+const TopTrainRow = ({ train, rank }) => (
+  <div style={{
+    display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0',
+    borderBottom: '1px solid #1e2433',
+  }}>
+    <div style={{ width: 24, height: 24, borderRadius: '50%', background: rank <= 3 ? ORANGE : '#1e2433',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 11, fontWeight: 700, color: '#fff', flexShrink: 0 }}>
+      {rank}
     </div>
-  );
-}
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ fontSize: 13, color: '#f9fafb', fontWeight: 600, fontFamily: FONT,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {train.name || train.train_id}
+      </div>
+      <div style={{ fontSize: 11, color: GRAY, fontFamily: FONT }}>{train.count} bookings</div>
+    </div>
+    <div style={{ fontSize: 13, color: GREEN, fontWeight: 600, fontFamily: FONT }}>
+      ₹{(train.revenue || 0).toLocaleString()}
+    </div>
+  </div>
+);
 
-// ─── Recent bookings row ──────────────────────────────────────────────────────
-function BookingRow({ b, idx }) {
-  const pnr      = b.PNR || '—';
-  const trainRef = getLookup(b.Trains);
-  const userRef  = getLookup(b.Users);
-  const jd       = displayZohoDate(b.Journey_Date);
-  const fare     = Number(b.Total_Fare || 0);
-  const status   = (b.Booking_Status || 'pending').toLowerCase();
-
-  return (
-    <tr
-      onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
-      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-    >
-      <td style={{ padding: '11px 14px', fontSize: 11, color: '#6b7280', fontFamily: MONO }}>{idx + 1}</td>
-      <td style={{ padding: '11px 14px' }}>
-        <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, color: '#60a5fa' }}>{pnr}</span>
-      </td>
-      <td style={{ padding: '11px 14px', fontSize: 12, color: 'var(--text-secondary)', fontFamily: FONT, maxWidth: 180 }}>
-        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{trainRef}</div>
-      </td>
-      <td style={{ padding: '11px 14px', fontSize: 12, color: 'var(--text-muted)', fontFamily: FONT }}>{userRef}</td>
-      <td style={{ padding: '11px 14px', fontSize: 12, color: 'var(--text-muted)', fontFamily: MONO }}>{jd}</td>
-      <td style={{ padding: '11px 14px', fontSize: 12, fontWeight: 700, color: '#22c55e', fontFamily: MONO }}>
-        {fare > 0 ? `₹${fare.toLocaleString('en-IN')}` : '—'}
-      </td>
-      <td style={{ padding: '11px 14px' }}>
-        <Badge status={status} />
-      </td>
-    </tr>
-  );
-}
-
-// ─── Main ─────────────────────────────────────────────────────────────────────
 export default function OverviewPage() {
-  const { addToast } = useToast();
+  const [stats,     setStats]     = useState(null);
+  const [topTrains, setTopTrains] = useState([]);
+  const [trends,    setTrends]    = useState(null);
+  const [insight,   setInsight]   = useState('');
+  const [loading,   setLoading]   = useState(true);
+  const [aiLoading, setAiLoading] = useState(false);
+  const toast = useToast?.();
 
-  const [stats, setStats]         = useState(null);
-  const [statsLoading, setSL]     = useState(true);
-  const [recentBk, setRecentBk]   = useState([]);
-  const [bkLoading, setBkL]       = useState(true);
-  const [trainList, setTrainList] = useState([]);
-
-  // ── Load stats
   useEffect(() => {
-    setSL(true);
-    overviewApi.stats()
-      .then(res => setStats(res?.data ?? {}))
-      .catch(() => addToast('Stats unavailable', 'error'))
-      .finally(() => setSL(false));
+    loadData();
   }, []);
 
-  // ── Load recent bookings
-  useEffect(() => {
-    setBkL(true);
-    bookingsApi.getAll({ limit: 200 })
-      .then(res => {
-        const all = extractRecords(res);
-        // Sort by booking ID desc (newest first)
-        const sorted = [...all].sort((a, b) => {
-          const aid = String(a.ID || '');
-          const bid = String(b.ID || '');
-          return bid.localeCompare(aid);
-        });
-        setRecentBk(sorted.slice(0, 10));
-      })
-      .catch(() => {})
-      .finally(() => setBkL(false));
-  }, []);
+  async function loadData() {
+    setLoading(true);
+    try {
+      const [s, t, tr] = await Promise.all([
+        analyticsApi.overview(),
+        analyticsApi.topTrains(8),
+        analyticsApi.trends(14),
+      ]);
+      setStats(s?.data || s);
+      setTopTrains(t?.data || []);
+      setTrends(tr?.data || null);
+    } catch (e) {
+      toast?.error?.('Failed to load dashboard data');
+    } finally {
+      setLoading(false);
+    }
+  }
 
-  // ── Load trains for quick stats
-  useEffect(() => {
-    trainsApi.getAll({ limit: 500 })
-      .then(res => setTrainList(extractRecords(res)))
-      .catch(() => {});
-  }, []);
+  async function loadAiInsight() {
+    setAiLoading(true);
+    try {
+      const res = await aiApi.analyze('overview', 'What are the key trends and any concerns?', 30);
+      setInsight(res?.insight || 'No insight available');
+    } catch (e) {
+      setInsight('AI insight unavailable. Check GEMINI_API_KEY configuration.');
+    } finally {
+      setAiLoading(false);
+    }
+  }
 
-  // ── Derived stats from backend
-  const totalRevenue = stats?.revenue_total || 0;
-  const revenueToday = stats?.revenue_today || 0;
-  const bkToday      = stats?.bookings_today || 0;
-  
-  const bd = stats?.bookings_by_status || {};
-  const confirmed  = bd['confirmed'] || 0;
-  const pending    = bd['pending'] || 0;
-  const cancelled  = bd['cancelled'] || 0;
-  const totalBkNum = stats?.total_bookings || 0;
-  const activeTrains = trainList.filter(t => String(t.Is_Active) !== 'false').length;
+  const statusColor = { confirmed: GREEN, cancelled: RED, waitlisted: ORANGE, pending: GRAY };
 
-  const thStyle = {
-    padding: '10px 14px', fontSize: 10, fontWeight: 700,
-    color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.07em',
-    borderBottom: '1px solid var(--border)', background: 'var(--bg-inset)',
-    textAlign: 'left', fontFamily: FONT, whiteSpace: 'nowrap',
-  };
+  if (loading) return (
+    <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><Spinner /></div>
+  );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
-      <PageHeader
-        icon="dashboard" iconAccent="#3b82f6"
-        title="Dashboard Overview"
-        subtitle="Real-time summary of railway operations"
-      />
+    <div style={{ fontFamily: FONT, padding: '0 0 40px' }}>
+      <PageHeader title="Dashboard Overview" subtitle="Live booking analytics and performance metrics" />
 
-      {/* ── 4-stat row ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
-        <StatCard
-          icon="train"     iconColor="#60a5fa" iconBg="rgba(59,130,246,0.18)"
-          label="Total Trains"   value={stats?.total_trains ?? '—'}
-          sub={activeTrains ? `${activeTrains} active` : undefined}
-          loading={statsLoading}
-        />
-        <StatCard
-          icon="station"   iconColor="#a78bfa" iconBg="rgba(139,92,246,0.18)"
-          label="Total Stations" value={stats?.total_stations ?? '—'}
-          loading={statsLoading}
-        />
-        <StatCard
-          icon="users"     iconColor="#34d399" iconBg="rgba(52,211,153,0.18)"
-          label="Registered Users" value={stats?.total_users ?? '—'}
-          loading={statsLoading}
-        />
-        <StatCard
-          icon="booking"   iconColor="#fb923c" iconBg="rgba(251,146,60,0.18)"
-          label="Total Bookings"  value={totalBkNum || '—'}
-          sub={`${bkToday} bookings today`}
-          trend={bkToday > 0 ? bkToday : undefined}
-          loading={statsLoading}
-        />
+      {/* Stat grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 24 }}>
+        <StatCard icon="🚉" label="Total Stations"  value={stats?.total_stations  ?? '—'} color={BLUE}   />
+        <StatCard icon="🚂" label="Total Trains"    value={stats?.total_trains    ?? '—'} color={ORANGE} />
+        <StatCard icon="👥" label="Registered Users" value={stats?.total_users    ?? '—'} color="#7c3aed"/>
+        <StatCard icon="🎫" label="Total Bookings"  value={stats?.total_bookings  ?? '—'} color={GREEN}  />
+        <StatCard icon="📅" label="Bookings Today"  value={stats?.bookings_today  ?? 0}   color={BLUE}   />
+        <StatCard icon="💰" label="Revenue Today"   value={`₹${(stats?.revenue_today  || 0).toLocaleString()}`} color={GREEN} />
+        <StatCard icon="📈" label="Total Revenue"   value={`₹${(stats?.revenue_total  || 0).toLocaleString()}`} color={ORANGE} sub="Non-cancelled bookings" />
       </div>
 
-      {/* ── Middle row: booking breakdown + top trains ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 16 }}>
-
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
         {/* Booking status breakdown */}
-        <Card>
-          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 20, fontFamily: FONT, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Icon name="booking" size={15} style={{ color: '#fb923c' }} />
-            Booking Breakdown
-            <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-faint)', fontFamily: MONO }}>all time</span>
-          </div>
-          {statsLoading ? (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}><Spinner size={20} /></div>
-          ) : (
-            <>
-              <MiniBar label="Confirmed" count={confirmed}  total={totalBkNum} color="#22c55e" />
-              <MiniBar label="Pending"   count={pending}    total={totalBkNum} color="#f59e0b" />
-              <MiniBar label="Cancelled" count={cancelled}  total={totalBkNum} color="#f87171" />
+        <div style={{ background: '#111827', border: '1px solid #1e2433', borderRadius: 12, padding: 20 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: '#f9fafb', marginBottom: 16 }}>Booking Status</div>
+          <BarChart data={stats?.bookings_by_status}
+                    colorFn={k => statusColor[k] || BLUE} />
+        </div>
 
-              {/* Revenue box */}
-              <div style={{ marginTop: 20, padding: '14px 16px', borderRadius: 12, background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)' }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: FONT }}>Confirmed Revenue</div>
-                <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: 4 }}>
-                  <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--text-primary)', fontFamily: FONT }}>
-                    {fmtCurrency(totalRevenue)}
-                  </div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: '#3b82f6', fontFamily: FONT, background: 'rgba(59,130,246,0.1)', padding: '2px 8px', borderRadius: 6 }}>
-                    + {fmtCurrency(revenueToday)} today
-                  </div>
-                </div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: FONT, marginTop: 4 }}>all-time total vs today</div>
-              </div>
-            </>
-          )}
-        </Card>
-
-        {/* Quick info cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
-          {[
-            {
-              icon: 'train', color: '#60a5fa', bg: 'rgba(59,130,246,0.08)',
-              title: 'Train Fleet',
-              lines: [
-                { label: 'Total registered', val: trainList.length },
-                { label: 'Active', val: activeTrains },
-                { label: 'Inactive', val: trainList.length - activeTrains },
-              ],
-            },
-            {
-              icon: 'seat', color: '#a78bfa', bg: 'rgba(139,92,246,0.08)',
-              title: 'Class Coverage',
-              lines: [
-                { label: 'Sleeper (SL)', val: trainList.filter(t => Number(t.Total_Seats_SL) > 0).length + ' trains' },
-                { label: '3-Tier AC', val: trainList.filter(t => Number(t.Total_Seats_3A) > 0).length + ' trains' },
-                { label: '2-Tier AC', val: trainList.filter(t => Number(t.Total_Seats_2A) > 0).length + ' trains' },
-              ],
-            },
-            {
-              icon: 'dollar', color: '#34d399', bg: 'rgba(52,211,153,0.08)',
-              title: 'Avg Fare (per class)',
-              lines: (() => {
-                const sl  = trainList.filter(t => Number(t.Fare_SL) > 0);
-                const a3  = trainList.filter(t => Number(t.Fare_3A) > 0);
-                const a2  = trainList.filter(t => Number(t.Fare_2A) > 0);
-                const avg = (arr, key) => arr.length ? Math.round(arr.reduce((s, t) => s + Number(t[key] || 0), 0) / arr.length) : 0;
-                return [
-                  { label: 'Sleeper avg', val: sl.length  ? `₹${avg(sl,  'Fare_SL')}` : '—' },
-                  { label: '3AC avg',     val: a3.length  ? `₹${avg(a3,  'Fare_3A')}` : '—' },
-                  { label: '2AC avg',     val: a2.length  ? `₹${avg(a2,  'Fare_2A')}` : '—' },
-                ];
-              })(),
-            },
-            {
-              icon: 'clock', color: '#fb923c', bg: 'rgba(251,146,60,0.08)',
-              title: 'System Status',
-              lines: [
-                { label: 'API Backend', val: '🟢 Connected' },
-                { label: 'Zoho Creator', val: '🟢 Active' },
-                { label: 'Last refresh', val: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) },
-              ],
-            },
-          ].map(card => (
-            <div key={card.title} style={{ background: card.bg, border: '1px solid var(--border)', borderRadius: 14, padding: '18px 20px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-                <Icon name={card.icon} size={15} style={{ color: card.color }} />
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', fontFamily: FONT }}>{card.title}</span>
-              </div>
-              {card.lines.map(l => (
-                <div key={l.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                  <span style={{ fontSize: 12, color: 'var(--text-muted)', fontFamily: FONT }}>{l.label}</span>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', fontFamily: MONO }}>{l.val}</span>
-                </div>
-              ))}
-            </div>
-          ))}
+        {/* Class breakdown */}
+        <div style={{ background: '#111827', border: '1px solid #1e2433', borderRadius: 12, padding: 20 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: '#f9fafb', marginBottom: 16 }}>Class Distribution</div>
+          <BarChart data={stats?.bookings_by_class} colorFn={() => BLUE} />
         </div>
       </div>
 
-      {/* ── Recent Bookings table ── */}
-      <Card padding={0}>
-        <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Icon name="booking" size={16} style={{ color: '#fb923c' }} />
-          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', fontFamily: FONT }}>Recent Bookings</span>
-          <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-faint)', fontFamily: FONT }}>latest 10</span>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
+        {/* Top trains */}
+        <div style={{ background: '#111827', border: '1px solid #1e2433', borderRadius: 12, padding: 20 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: '#f9fafb', marginBottom: 16 }}>🏆 Top Trains</div>
+          {topTrains.length ? topTrains.map((t, i) => (
+            <TopTrainRow key={t.train_id} train={t} rank={i + 1} />
+          )) : <div style={{ color: GRAY, fontSize: 13 }}>No data available</div>}
         </div>
 
-        {bkLoading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
-            <Spinner size={28} color="#fb923c" />
+        {/* 14-day trend */}
+        <div style={{ background: '#111827', border: '1px solid #1e2433', borderRadius: 12, padding: 20 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: '#f9fafb', marginBottom: 16 }}>📊 Last 14 Days</div>
+          {trends?.daily ? (
+            <BarChart
+              data={Object.fromEntries(
+                Object.entries(trends.daily)
+                  .sort(([a], [b]) => a.localeCompare(b))
+                  .slice(-14)
+                  .map(([date, d]) => [date.slice(5), (d.confirmed || 0)])
+              )}
+              title="Confirmed bookings per day"
+              colorFn={() => GREEN}
+            />
+          ) : <div style={{ color: GRAY, fontSize: 13 }}>No trend data</div>}
+        </div>
+      </div>
+
+      {/* AI Insights panel */}
+      <div style={{ background: '#111827', border: '1px solid #1e2433', borderRadius: 12, padding: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 20 }}>🤖</span>
+            <span style={{ fontSize: 15, fontWeight: 600, color: '#f9fafb' }}>AI Insights</span>
+            <span style={{ fontSize: 11, color: GRAY, background: '#1e2433', borderRadius: 10,
+                           padding: '2px 8px' }}>Powered by Gemini</span>
           </div>
-        ) : recentBk.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '40px 24px', color: 'var(--text-muted)', fontFamily: FONT }}>
-            <div style={{ fontSize: 32, marginBottom: 10 }}>📋</div>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>No bookings yet</div>
-          </div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  {['#', 'PNR', 'Train', 'Passenger', 'Journey Date', 'Fare', 'Status'].map(h => (
-                    <th key={h} style={thStyle}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {recentBk.map((b, i) => (
-                  <BookingRow key={b.ID || i} b={b} idx={i} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+          <button
+            onClick={loadAiInsight}
+            disabled={aiLoading}
+            style={{
+              padding: '6px 16px', borderRadius: 8, fontSize: 12,
+              background: aiLoading ? '#1e2433' : BLUE, color: '#fff',
+              border: 'none', cursor: aiLoading ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {aiLoading ? 'Analyzing…' : '✨ Generate Insight'}
+          </button>
+        </div>
+        <div style={{
+          background: '#0a0d14', borderRadius: 8, padding: 16,
+          color: '#d1d5db', fontSize: 13, lineHeight: 1.7, fontFamily: FONT,
+          minHeight: 60, whiteSpace: 'pre-wrap',
+        }}>
+          {insight || (
+            <span style={{ color: GRAY }}>
+              Click "Generate Insight" to get an AI-powered analysis of your booking data using Gemini.
+            </span>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

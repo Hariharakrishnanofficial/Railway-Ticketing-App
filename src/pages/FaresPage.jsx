@@ -268,7 +268,7 @@ export default function FaresPage() {
           { l: 'Active Rules', v: rows.filter(r => r.Is_Active === true || r.Is_Active === 'true').length, c: '#4ade80' },
           { l: 'Concessions', v: new Set(rows.map(r => r.Concession_Type)).size, c: '#60a5fa' },
           { l: 'Classes', v: new Set(rows.map(r => r.Class)).size, c: '#fbbf24' },
-          { l: 'Avg Base Fare', v: rows.length ? `₹${Math.round(rows.reduce((a,r) => a + Number(r.Base_Fare||0), 0)/rows.length)}` : '—', c: '#f472b6' },
+          { l: 'Avg Base Fare', v: rows.length ? `₹${Math.round(rows.reduce((a, r) => a + Number(r.Base_Fare || 0), 0) / rows.length)}` : '—', c: '#f472b6' },
         ].map(s => (
           <div key={s.l} style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 12, padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 500 }}>{s.l}</span>
@@ -367,18 +367,12 @@ export default function FaresPage() {
 
             <FormDivider label="Concession" />
 
-            <FormRow cols={2}>
-              <Dropdown
-                label="Concession Type" name="Concession_Type"
-                value={form.Concession_Type} onChange={handleChange}
-                options={CONCESSION_OPTS} placeholder={false}
-              />
-              <Field
-                label="Discount %" name="Concession_Percent"
-                value={form.Concession_Percent} onChange={handleChange}
-                type="number" placeholder="0"
-              />
-            </FormRow>
+            <Field
+              label="Discount %" name="Concession_Percent"
+              value={form.Concession_Percent} onChange={handleChange}
+              type="number" placeholder="0"
+            />
+
 
             <FormDivider label="Surcharges & Tax" />
 
@@ -441,16 +435,16 @@ export default function FaresPage() {
               <div style={{ gridColumn: '1 / -1' }}><strong style={{ color: 'var(--text-primary)' }}>Train:</strong> {getLookupLabel(editRow.Train)}</div>
               <div style={{ gridColumn: '1 / -1' }}><strong style={{ color: 'var(--text-primary)' }}>From Station:</strong> {getLookupLabel(editRow.From_Station)}</div>
               <div style={{ gridColumn: '1 / -1' }}><strong style={{ color: 'var(--text-primary)' }}>To Station:</strong> {getLookupLabel(editRow.To_Station)}</div>
-              
+
               <div><strong style={{ color: 'var(--text-primary)' }}>Class:</strong> {editRow.Class}</div>
               <div><strong style={{ color: 'var(--text-primary)' }}>Distance:</strong> {editRow.Distance_KM ? `${editRow.Distance_KM} km` : '—'}</div>
-              
+
               <div><strong style={{ color: 'var(--text-primary)' }}>Base Fare:</strong> ₹{editRow.Base_Fare}</div>
               <div><strong style={{ color: 'var(--text-primary)' }}>Dynamic Fare:</strong> ₹{editRow.Dynamic_Fare || '—'}</div>
-              
+
               <div><strong style={{ color: 'var(--text-primary)' }}>Concession Type:</strong> {editRow.Concession_Type || 'General'}</div>
               <div><strong style={{ color: 'var(--text-primary)' }}>Discount %:</strong> {editRow.Concession_Percent || '0'}%</div>
-              
+
               <div><strong style={{ color: 'var(--text-primary)' }}>Effective From:</strong> {editRow.Effective_From ? editRow.Effective_From.split(' ')[0] : '—'}</div>
               <div><strong style={{ color: 'var(--text-primary)' }}>Effective To:</strong> {editRow.Effective_To ? editRow.Effective_To.split(' ')[0] : 'Ongoing'}</div>
 
@@ -473,7 +467,7 @@ export default function FaresPage() {
       {calcModal && (
         <Modal title="Fare Calculator" onClose={() => { setCalcModal(false); setCalcResult(null); }} width={480}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            
+
             <Dropdown
               label="Train" name="train_id" value={calcForm.train_id}
               onChange={calcHandleChange} required
@@ -519,8 +513,8 @@ export default function FaresPage() {
               />
             </FormRow>
 
-            <Button 
-              onClick={handleCalculate} 
+            <Button
+              onClick={handleCalculate}
               disabled={calculating || !calcForm.train_id || !calcForm.from_station || !calcForm.to_station}
               accent="var(--accent-rose)"
               style={{ marginTop: 8 }}
@@ -529,18 +523,18 @@ export default function FaresPage() {
             </Button>
 
             {calcResult && (
-              <div style={{ 
-                marginTop: 16, 
-                padding: 20, 
-                background: 'var(--bg-inset)', 
-                border: '1px solid var(--border)', 
+              <div style={{
+                marginTop: 16,
+                padding: 20,
+                background: 'var(--bg-inset)',
+                border: '1px solid var(--border)',
                 borderRadius: 12,
                 animation: 'slideInUp 0.3s ease'
               }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 12 }}>
                   Fare Breakdown
                 </div>
-                
+
                 {[
                   { label: 'Base Fare', value: `₹${calcResult.base_fare}`, color: 'var(--text-secondary)' },
                   { label: 'Dynamic Pricing', value: calcResult.dynamic_fare_adjustment > 0 ? `+₹${calcResult.dynamic_fare_adjustment}` : '—', color: '#fbbf24' },
@@ -554,11 +548,11 @@ export default function FaresPage() {
                   </div>
                 ))}
 
-                <div style={{ 
-                  marginTop: 12, 
-                  paddingTop: 12, 
-                  borderTop: '2px solid var(--accent-rose)', 
-                  display: 'flex', 
+                <div style={{
+                  marginTop: 12,
+                  paddingTop: 12,
+                  borderTop: '2px solid var(--accent-rose)',
+                  display: 'flex',
                   justifyContent: 'space-between',
                   fontSize: 18,
                   fontWeight: 800,

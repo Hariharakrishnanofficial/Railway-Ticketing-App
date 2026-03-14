@@ -34,6 +34,28 @@ export function setCatalystToken(token) {
   else sessionStorage.removeItem('catalyst_token');
 }
 
+// ─── JWT token storage (v2.0) ─────────────────────────────────────────────────
+const TOKEN_KEY = 'rail_access_token';
+const REFRESH_KEY = 'rail_refresh_token';
+
+export function getAccessToken() { return sessionStorage.getItem(TOKEN_KEY) || null; }
+export function getRefreshToken() { return localStorage.getItem(REFRESH_KEY) || null; }
+
+export function setTokens({ access_token, refresh_token } = {}) {
+  if (access_token) sessionStorage.setItem(TOKEN_KEY, access_token);
+  if (refresh_token) localStorage.setItem(REFRESH_KEY, refresh_token);
+}
+
+export function clearTokens() {
+  sessionStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(REFRESH_KEY);
+  sessionStorage.removeItem('rail_user');
+}
+
+export function setCurrentUser(user) {
+  if (user) sessionStorage.setItem('rail_user', JSON.stringify(user));
+}
+
 /**
  * Returns true if the current session user is an admin.
  * admin@admin.com is ALWAYS admin regardless of Role field.
@@ -63,26 +85,79 @@ const client = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
-// Inject Catalyst token into every request automatically.
-// Catalyst's gateway reads the Authorization header to validate cross-domain
-// requests — this is what resolves CORS between Slate and AppSail.
+// ─── Request interceptor: inject JWT + legacy headers ─────────────────────────
 client.interceptors.request.use((config) => {
-  const token = getCatalystToken();
+  // JWT takes priority, falls back to legacy Catalyst token
+  const token = getAccessToken() || getCatalystToken();
   if (token) {
     config.headers['Authorization'] = `Bearer ${token}`;
+  }
+  // Legacy headers for backward compat with admin endpoints
+  const user = getCurrentUser();
+  if (user) {
+    config.headers['X-User-Email'] = user.Email || '';
+    config.headers['X-User-Role'] = user.Role || '';
+    config.headers['X-User-ID'] = user.ID || '';
   }
   return config;
 });
 
+// ─── Response interceptor: auto-refresh on 401 + existing error handling ──────
+let _refreshing = false;
+let _refreshQueue = [];
+
+function processRefreshQueue(error, token) {
+  _refreshQueue.forEach(p => error ? p.reject(error) : p.resolve(token));
+  _refreshQueue = [];
+}
+
 client.interceptors.response.use(
   (res) => res.data,
-  (err) => {
+  async (err) => {
+    const original = err.config;
+
+    // 401 handler — try to refresh JWT once
+    if (err.response?.status === 401 && !original._retry) {
+      const refreshToken = getRefreshToken();
+      if (refreshToken) {
+        if (_refreshing) {
+          return new Promise((resolve, reject) => {
+            _refreshQueue.push({ resolve, reject });
+          }).then(token => {
+            original.headers['Authorization'] = `Bearer ${token}`;
+            return client(original);
+          });
+        }
+        original._retry = true;
+        _refreshing = true;
+        try {
+          const res = await axios.post(`${BASE_URL}auth/refresh`,
+            { refresh_token: refreshToken }, { timeout: 10000 });
+          const newToken = res.data?.access_token;
+          if (newToken) {
+            setTokens({ access_token: newToken });
+            processRefreshQueue(null, newToken);
+            original.headers['Authorization'] = `Bearer ${newToken}`;
+            return client(original);
+          }
+        } catch (refreshErr) {
+          processRefreshQueue(refreshErr, null);
+          clearTokens();
+          window.dispatchEvent(new CustomEvent('auth:expired'));
+          return Promise.reject(refreshErr);
+        } finally {
+          _refreshing = false;
+        }
+      }
+    }
+
     // Auth routes: return the error JSON body as a resolved value so callers
     // can read res.success / res.error without a try/catch throw.
     const url = err.config?.url || '';
     if (url.includes('/auth/') && err.response?.data) {
       return Promise.resolve(err.response.data);
     }
+
     // BUG FIX: Zoho sometimes wraps error messages inside nested objects.
     // Previously only checked .error and .message at the top level, so Zoho
     // errors like { message: { message: "..." } } produced the unhelpful
@@ -246,6 +321,7 @@ export const usersApi = {
   delete: (id) => client.delete(`/users/${id}`, { headers: adminHeaders() }),
   updateProfile: (id, data) => client.put(`/users/${id}/profile`, data),
   updateStatus: (id, data) => client.put(`/users/${id}/status`, data, { headers: adminHeaders() }),
+  insights: (id) => client.get(`/users/${id}/insights`),
 };
 
 // Bookings — mixed: passengers create/cancel own; admin sees all
@@ -273,10 +349,12 @@ export const settingsApi = {
   delete: (id) => client.delete(`/settings/${id}`, { headers: adminHeaders() }),
 };
 
-// Auth — public
+// Auth — public + new JWT refresh/logout
 export const authApi = {
   login: (data) => client.post('/auth/login', data),
   register: (data) => client.post('/auth/register', data),
+  logout: () => client.post('/auth/logout', {}),
+  refresh: (token) => client.post('/auth/refresh', { refresh_token: token }),
   setupAdmin: (data) => client.post('/auth/setup-admin', data),
   changePassword: (data) => client.post('/auth/change-password', data),
   forgotPassword: (data) => client.post('/auth/forgot-password', data),
@@ -454,17 +532,50 @@ export const mcpApi = {
   systemInfo: () => client.get('/debug/system', { headers: adminHeaders() }),
   testToken: () => client.get('/test/token', { headers: adminHeaders() }),
   aiTranslate: (query) => client.post('/debug/ai-search', { query }, { headers: adminHeaders() }),
-  // Dynamically fetch any report by its alias via a unified backend proxy
-  fetchRawReport: (alias, params) => {
-    return client.get('/debug/raw', { 
-      params: { 
-        ...params,
-        report: alias 
-      }, 
-      headers: adminHeaders() 
-    });
-  },
+  fetchRawReport: (alias, params) => client.get('/debug/raw', {
+    params: { ...params, report: alias },
+    headers: adminHeaders(),
+  }),
   systemLogs: (limit = 50) => client.get('/admin/logs', { params: { limit }, headers: adminHeaders() }),
+};
+
+// ─── AI API (v2.0) ────────────────────────────────────────────────────────────
+
+export const aiApi = {
+  // Natural language → Zoho search results
+  search: (query) =>
+    client.post('/ai/search', { query }),
+  agent: (message, history = [], userRole = 'User') =>
+    client.post('/ai/agent', { message, history, user_role: userRole }),
+  // Multi-turn booking assistant conversation
+  chat: (message, history = []) =>
+    client.post('/ai/chat', { message, history }),
+
+  // Personalised train recommendations for a user
+  recommendations: (userId, source = '', destination = '') =>
+    client.get('/ai/recommendations', { params: { user_id: userId, source, destination } }),
+
+  // Admin: Gemini-powered analytics insight
+  analyze: (type = 'overview', question = '', days = 30) =>
+    client.post('/ai/analyze', { type, question, days }),
+
+  // Seat availability prediction for a train+date+class
+  predictAvailability: (trainId, date, cls = 'SL') =>
+    client.get('/ai/predict-availability', { params: { train_id: trainId, date, class: cls } }),
+
+  // Cache management (admin)
+  cacheStats: () => client.get('/ai/cache-stats'),
+  invalidateCache: (prefix = '') => client.post('/ai/cache/invalidate', { prefix }),
+};
+
+// ─── Analytics API (v2.0) ─────────────────────────────────────────────────────
+
+export const analyticsApi = {
+  overview: () => client.get('/analytics/overview'),
+  trends: (days) => client.get('/analytics/trends', { params: { days } }),
+  topTrains: (n = 10) => client.get('/analytics/top-trains', { params: { n } }),
+  routes: () => client.get('/analytics/routes'),
+  revenue: () => client.get('/analytics/revenue'),
 };
 
 export default client;

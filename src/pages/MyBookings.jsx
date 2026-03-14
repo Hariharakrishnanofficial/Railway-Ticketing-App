@@ -5,7 +5,7 @@
  * Cancellation via: POST /api/bookings/{id}/cancel
  */
 import { useState, useEffect, useCallback } from 'react';
-import { bookingsApi, extractRecords, getRecordId, getLookupLabel } from '../services/api';
+import { bookingsApi, userBookingsApi, extractRecords, getRecordId, getLookupLabel } from '../services/api';
 import { useToast } from '../context/ToastContext';
 import { PageHeader, Card, Badge, Icon, Spinner, Button } from '../components/UI';
 
@@ -128,17 +128,17 @@ function BookingCard({ booking, onCancel, cancelling }) {
                   <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Passengers</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                     {pList.map((p, i) => (
-                      <div key={i} style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 12px', fontSize: 12, opacity: p.status === 'Cancelled' ? 0.5 : 1 }}>
-                        <span style={{ fontWeight: 700, color: p.status === 'Cancelled' ? '#f87171' : 'var(--text-primary)' }}>{p.name} {p.status === 'Cancelled' ? '(Cancelled)' : ''}</span>
-                        <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>{p.age}y · {p.gender}</span>
-                        {p.berthPref && p.berthPref !== 'No Preference' && <span style={{ color: 'var(--accent-blue)', marginLeft: 6 }}>{p.berthPref}</span>}
-                        {p.seat && <span style={{ color: '#4ade80', marginLeft: 6, fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 11 }}>🪑 {p.seat}</span>}
+                      <div key={i} style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 12px', fontSize: 12, opacity: (p.Status === 'Cancelled' || p.status === 'Cancelled') ? 0.5 : 1 }}>
+                        <span style={{ fontWeight: 700, color: (p.Status === 'Cancelled' || p.status === 'Cancelled') ? '#f87171' : 'var(--text-primary)' }}>{p.Name || p.name} {(p.Status === 'Cancelled' || p.status === 'Cancelled') ? '(Cancelled)' : ''}</span>
+                        <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>{p.Age || p.age}y · {p.Gender || p.gender}</span>
+                        {(p.Berth_Preference || p.berthPref) && (p.Berth_Preference || p.berthPref) !== 'No Preference' && <span style={{ color: 'var(--accent-blue)', marginLeft: 6 }}>{p.Berth_Preference || p.berthPref}</span>}
+                        {(p.Seat || p.seat) && <span style={{ color: '#4ade80', marginLeft: 6, fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 11 }}>🪑 {p.Seat || p.seat}</span>}
                       </div>
                     ))}
                   </div>
                 </div>
               );
-            } catch {}
+            } catch (err) {}
             return null;
           })()}
 
@@ -205,9 +205,10 @@ function CancelModal({ booking, onConfirm, onClose, cancelling }) {
   if (!booking) return null;
   const [selectedPax, setSelectedPax] = useState([]);
 
+  let pList = [];
   try {
-    var pList = typeof booking.Passengers === 'string' ? JSON.parse(booking.Passengers) : (booking.Passengers || []);
-  } catch { var pList = []; }
+    pList = typeof booking.Passengers === 'string' ? JSON.parse(booking.Passengers) : (booking.Passengers || []);
+  } catch (err) { pList = []; }
 
   const activePax = pList.filter(p => !p.status || p.status.toLowerCase() !== 'cancelled');
   const totalPax = Math.max(1, Number(booking.Passenger_Count || 1));
@@ -274,7 +275,7 @@ function CancelModal({ booking, onConfirm, onClose, cancelling }) {
             </div>
             <div>
               <div style={labelS}>Class / Passengers</div>
-              <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{booking.Class} · {pax} pax</div>
+              <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{booking.Class} · {totalPax} pax</div>
             </div>
             {hoursLeft !== null && (
               <div style={{ gridColumn: '1/-1' }}>
@@ -292,16 +293,16 @@ function CancelModal({ booking, onConfirm, onClose, cancelling }) {
               <div style={labelS}>Select Passengers to Cancel</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {activePax.map((p, i) => {
-                  const isChecked = selectedPax.includes(p.name);
+                  const isChecked = selectedPax.includes(i);
                   return (
                   <label key={i} style={{ ...iS, display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', cursor: 'pointer', background: isChecked ? 'rgba(239, 68, 68, 0.1)' : 'var(--bg-inset)', border: isChecked ? '1px solid #ef444450' : '1px solid var(--border)', transition: 'all 0.2s' }}>
                     <input type="checkbox" checked={isChecked} onChange={(e) => {
-                        if (e.target.checked) setSelectedPax(prev => [...prev, p.name]);
-                        else setSelectedPax(prev => prev.filter(n => n !== p.name));
+                        if (e.target.checked) setSelectedPax(prev => [...prev, i]); // Use index
+                        else setSelectedPax(prev => prev.filter(idx => idx !== i));
                     }} style={{ width: 16, height: 16, accentColor: '#ef4444' }} />
                     <div style={{ flex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{p.name}</span>
-                        <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{p.age}y · {p.gender}</span>
+                        <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{p.Name || p.name}</span>
+                        <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{p.Age || p.age}y · {p.Gender || p.gender}</span>
                     </div>
                   </label>
                 )})}
@@ -370,7 +371,7 @@ function CancelModal({ booking, onConfirm, onClose, cancelling }) {
 
 export default function MyBookings() {
   const { addToast } = useToast();
-  const [user]         = useState(() => { try { return JSON.parse(sessionStorage.getItem('rail_user')); } catch { return null; } });
+  const [user]         = useState(() => { try { return JSON.parse(sessionStorage.getItem('rail_user')); } catch (e) { return null; } });
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading]   = useState(false);
   const [filter, setFilter]     = useState('all'); // all | upcoming | past | confirmed | cancelled
@@ -383,14 +384,7 @@ export default function MyBookings() {
     setLoading(true);
     try {
       // Try user-specific endpoint first, fall back to filtered getAll
-      let res;
-      try {
-        res = await fetch(`${(window.VITE_API_BASE_URL || 'http://127.0.0.1:4600/api')}/users/${user.ID}/bookings`, {
-          headers: { 'Content-Type': 'application/json' }
-        }).then(r => r.json());
-      } catch {
-        res = await bookingsApi.getAll({ user_id: user.ID });
-      }
+      const res = await userBookingsApi.getByUser(user.ID);
       const all = extractRecords(res);
       // Sort by journey_date descending
       all.sort((a, b) => {
@@ -415,15 +409,20 @@ export default function MyBookings() {
     const id = getRecordId(booking);
     setCancelling(id);
     try {
-      const payload = { Refund_Amount: refundAmt };
-      if (cancelPassengers) payload.Cancel_Passengers = cancelPassengers;
-
-      const res = await bookingsApi.cancel(id, payload);
+      let res;
+      if (cancelPassengers) {
+        // Partial cancellation
+        res = await bookingsApi.partialCancel(id, cancelPassengers);
+      } else {
+        // Full cancellation
+        res = await bookingsApi.cancel(id);
+      }
+      
       if (res?.success === false) throw new Error(res.error || res.message);
       
       addToast(cancelPassengers ? `Partial cancellation successful. Refund ₹${refundAmt} initiated.` : `Ticket ${booking.PNR} cancelled. Refund ₹${refundAmt} initiated.`, 'success');
       setCancelTarget(null);
-      await loadBookings(); // Reload to get updated passenger statuses
+      await loadBookings();
     } catch (err) {
       addToast(err.message || 'Cancellation failed', 'error');
       await loadBookings();

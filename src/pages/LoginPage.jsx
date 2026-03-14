@@ -178,6 +178,10 @@ export default function LoginPage({ onLogin }) {
         if (!userData || typeof userData !== 'object' || Array.isArray(userData))
           throw new Error('Unexpected server response. Please try again.');
 
+        // Store JWT tokens (new system)
+        if (res.access_token)  { import('../services/api.js').then(m => m.setTokens({ access_token: res.access_token, refresh_token: res.refresh_token })); }
+        // Legacy compat
+        if (res.catalyst_token) { sessionStorage.setItem('catalyst_token', res.catalyst_token); }
         sessionStorage.setItem('rail_user', JSON.stringify(userData));
         // Store Catalyst token — sent in Authorization header on all API calls
         if (res?.catalyst_token) window.setCatalystToken?.(res.catalyst_token);
@@ -222,7 +226,8 @@ export default function LoginPage({ onLogin }) {
         switchMode('login');
       }
     } catch (err) {
-      addToast(err.message || 'Something went wrong', 'error');
+      const msg = err.error || err.message || 'Something went wrong';
+      addToast(msg, 'error');
     } finally {
       setLoading(false);
     }
