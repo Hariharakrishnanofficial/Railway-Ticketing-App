@@ -92,7 +92,7 @@ const blankStop = (seq) => ({
   Stations:'', Station_Name:'', Station_Code:'',
   Sequence: seq, Arrival_Time:'', Departure_Time:'',
   Halt_Minutes:'', Distance_KM:'', Day_Count:'1',
-  Is_Loco_Reversal: 'false', Platform_Expected: '',
+  Platform_Number: '',
 });
 
 // ─── Validation logic ─────────────────────────────────────────────────────────
@@ -265,7 +265,7 @@ function StopRow({
         </div>
 
         {/* Row 2: Timing — no Sequence input; drag position assigns sequence */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 72px 90px 56px', gap:8 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 72px 90px 56px 70px', gap:8 }}>
           <div>
             <span style={lbS}>Arrival</span>
             <input type="time" value={stop.Arrival_Time}
@@ -304,16 +304,10 @@ function StopRow({
               onBlur={ev => onBlur(ev, !!e.Day_Count)} />
             <InlineError msg={e.Day_Count} />
           </div>
-          <div style={{ display:'flex', alignItems:'center', gap:5, alignSelf:'end', paddingBottom:6 }}>
-            <input type="checkbox" id={`lr-${stop._key}`} checked={stop.Is_Loco_Reversal === 'true' || stop.Is_Loco_Reversal === true}
-              onChange={ev => set('Is_Loco_Reversal', ev.target.checked ? 'true' : 'false')}
-              style={{ width:14, height:14, accentColor:C.blue }} />
-            <label htmlFor={`lr-${stop._key}`} style={{ fontSize:10, fontWeight:700, color:C.muted, cursor:'pointer' }}>Loco Rev</label>
-          </div>
           <div>
             <span style={lbS}>Platform</span>
-            <input value={stop.Platform_Expected} placeholder="1"
-              onChange={ev => set('Platform_Expected', ev.target.value)}
+            <input type="number" min={1} value={stop.Platform_Number} placeholder="1"
+              onChange={ev => set('Platform_Number', ev.target.value)}
               style={inp()} onFocus={onFocus} onBlur={onBlur} />
           </div>
         </div>
@@ -387,8 +381,7 @@ function CreateRoutePanel({ train, stations, onCreated, onCancel }) {
     if (s.Departure_Time)        p.Departure_Time = s.Departure_Time;
     if (s.Halt_Minutes !== '')   p.Halt_Minutes   = Number(s.Halt_Minutes);
     if (s.Distance_KM  !== '')   p.Distance_KM    = Number(s.Distance_KM);
-    if (s.Platform_Expected)     p.Platform_Expected = s.Platform_Expected;
-    p.Is_Loco_Reversal = (s.Is_Loco_Reversal === 'true' || s.Is_Loco_Reversal === true) ? 'true' : 'false';
+    if (s.Platform_Number)       p.Platform_Number = Number(s.Platform_Number);
     return p;
   };
 
@@ -404,7 +397,7 @@ function CreateRoutePanel({ train, stations, onCreated, onCancel }) {
     try {
       const res = await trainRoutesApi.create({
         Train: getRecordId(train),
-        stops: stops.map(buildPayload),
+        Route_Stops: stops.map(buildPayload),
       });
       if (res?.success === false)
         throw new Error(res?.error || res?.message || 'Create failed');
@@ -532,8 +525,7 @@ function StopForm({ initial, stations, onSave, onCancel, saving, title, existing
     Halt_Minutes:   (init.Halt_Minutes !== null && init.Halt_Minutes !== undefined && init.Halt_Minutes !== '') ? String(init.Halt_Minutes) : '',
     Distance_KM:    (init.Distance_KM  !== null && init.Distance_KM  !== undefined && init.Distance_KM  !== '') ? String(init.Distance_KM)  : '',
     Day_Count:      (init.Day_Count !== null && init.Day_Count !== undefined && init.Day_Count !== '') ? String(init.Day_Count) : '1',
-    Is_Loco_Reversal: (init.Is_Loco_Reversal === 'true' || init.Is_Loco_Reversal === true) ? 'true' : 'false',
-    Platform_Expected: init.Platform_Expected || '',
+    Platform_Number: (init.Platform_Number !== null && init.Platform_Number !== undefined && init.Platform_Number !== '') ? String(init.Platform_Number) : '',
   };
   const [f, setF] = useState(initialState);
   const [errs, setErrs] = useState({});
@@ -586,8 +578,7 @@ function StopForm({ initial, stations, onSave, onCancel, saving, title, existing
     if (f.Departure_Time) payload.Departure_Time = f.Departure_Time;
     if (f.Halt_Minutes !== '') payload.Halt_Minutes = Number(f.Halt_Minutes);
     if (f.Distance_KM !== '') payload.Distance_KM = Number(f.Distance_KM);
-    if (f.Platform_Expected) payload.Platform_Expected = f.Platform_Expected;
-    payload.Is_Loco_Reversal = f.Is_Loco_Reversal === 'true' ? 'true' : 'false';
+    if (f.Platform_Number !== '') payload.Platform_Number = Number(f.Platform_Number);
     onSave(payload);
   };
 
@@ -636,7 +627,7 @@ function StopForm({ initial, stations, onSave, onCancel, saving, title, existing
       </div>
 
       {/* Row 2 */}
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 80px 100px 60px', gap:10, marginBottom:14 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 80px 100px 60px 70px', gap:10, marginBottom:14 }}>
         <div>
           <span style={lbS}>Arrival</span>
           <input type="time" value={f.Arrival_Time}
@@ -671,16 +662,10 @@ function StopForm({ initial, stations, onSave, onCancel, saving, title, existing
             style={inp(errs.Day_Count)} onFocus={onFocus} onBlur={e=>onBlur(e,!!errs.Day_Count)} />
           <InlineError msg={errs.Day_Count} />
         </div>
-        <div style={{ display:'flex', alignItems:'center', gap:10, alignSelf:'end', paddingBottom:8 }}>
-          <input type="checkbox" id="stop-lr" checked={f.Is_Loco_Reversal === 'true'}
-            onChange={e=>set('Is_Loco_Reversal', e.target.checked ? 'true' : 'false')}
-            style={{ width:16, height:16, accentColor:C.blue }} />
-          <label htmlFor="stop-lr" style={{ fontSize:11, fontWeight:700, color:C.muted, cursor:'pointer' }}>Loco Reversal</label>
-        </div>
         <div>
-          <span style={lbS}>Platform (Exp)</span>
-          <input value={f.Platform_Expected} placeholder="1"
-            onChange={e=>set('Platform_Expected',e.target.value)}
+          <span style={lbS}>Platform</span>
+          <input type="number" min={1} value={f.Platform_Number} placeholder="1"
+            onChange={e=>set('Platform_Number',e.target.value)}
             style={inp()} onFocus={onFocus} onBlur={onBlur} />
         </div>
       </div>

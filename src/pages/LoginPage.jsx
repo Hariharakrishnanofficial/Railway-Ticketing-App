@@ -178,8 +178,13 @@ export default function LoginPage({ onLogin }) {
         if (!userData || typeof userData !== 'object' || Array.isArray(userData))
           throw new Error('Unexpected server response. Please try again.');
 
+        // Clear stale tokens from any previous session before storing new credentials
+        const { clearTokens, setTokens: _setTokens } = await import('../services/api.js');
+        clearTokens();
+        sessionStorage.removeItem('catalyst_token');
+
         // Store JWT tokens (new system)
-        if (res.access_token)  { import('../services/api.js').then(m => m.setTokens({ access_token: res.access_token, refresh_token: res.refresh_token })); }
+        if (res.access_token)  { _setTokens({ access_token: res.access_token, refresh_token: res.refresh_token }); }
         // Legacy compat
         if (res.catalyst_token) { sessionStorage.setItem('catalyst_token', res.catalyst_token); }
         sessionStorage.setItem('rail_user', JSON.stringify(userData));

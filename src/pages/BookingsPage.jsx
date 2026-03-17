@@ -6,6 +6,7 @@ import {
 } from '../services/api';
 import { useApi } from '../hooks/useApi';
 import { useToast } from '../context/ToastContext';
+import { useSettings } from '../context/SettingsContext';
 import { PageHeader, Button, Card, Input, Modal } from '../components/UI';
 import CRUDTable from '../components/CRUDTable';
 import { Field, Dropdown, FormRow, FormDivider, FormActions, FormApiError, DebugRecord } from '../components/FormFields';
@@ -112,6 +113,7 @@ function rowSearchText(row) {
 
 export default function BookingsPage() {
   const { addToast } = useToast();
+  const { getDropdownOptions } = useSettings();
   const [search, setSearch]       = useState('');
   const [statusFilter, setStatus] = useState('');
   const [modal, setModal]         = useState(null);
@@ -124,27 +126,20 @@ export default function BookingsPage() {
   const fetchFn        = useCallback(() => bookingsApi.getAll(), []);
   const fetchUsersFn   = useCallback(() => usersApi.getAll(), []);
   const fetchTrainsFn  = useCallback(() => trainsApi.getAll(), []);
-  const fetchSettingsFn = useCallback(() => settingsApi.getAll(), []);
 
   const { data, loading, refetch } = useApi(fetchFn);
   const { data: usersData }        = useApi(fetchUsersFn);
   const { data: trainsData }       = useApi(fetchTrainsFn);
-  const { data: settingsData }     = useApi(fetchSettingsFn);
 
   const rows    = extractRecords(data);
   const users   = extractRecords(usersData);
   const trains  = extractRecords(trainsData);
-  const allSettings = extractRecords(settingsData);
 
-  // Derive dropdown options from settings; fall back to defaults if no matching records
-  const classSettings   = allSettings.filter(s => (s.Type_field ?? '').toLowerCase().includes('class') || (s.Type_field ?? '').toLowerCase().includes('seat'));
-  const statusSettings  = allSettings.filter(s => (s.Type_field ?? '').toLowerCase().includes('booking_status') || (s.Type_field ?? '') === 'Booking_Status');
-  const paymentSettings = allSettings.filter(s => (s.Type_field ?? '').toLowerCase().includes('payment_status') || (s.Type_field ?? '') === 'Payment_Status');
-
-  // Always use DEFAULT_CLASS_OPTS (IRCTC codes) — Settings may override labels
-  const CLASS_OPTS   = DEFAULT_CLASS_OPTS;
-  const STATUS_OPTS  = DEFAULT_STATUS_OPTS;
-  const PAYMENT_OPTS = DEFAULT_PAYMENT_OPTS;
+  // Get dropdown options from settings context
+  const CLASS_OPTS   = getDropdownOptions('classes');
+  const STATUS_OPTS  = getDropdownOptions('booking_status');
+  const PAYMENT_OPTS = getDropdownOptions('payment_status');
+  const QUOTA_OPTS   = getDropdownOptions('quotas');
 
   const userOptions  = users.map(u  => ({ value: u.ID, label: `${u.Full_Name ?? ''} (${u.Email ?? ''})` }));
   const trainOptions = trains.map(t => ({ value: t.ID, label: `${t.Train_Number ?? ''} – ${t.Train_Name ?? ''}` }));
@@ -351,7 +346,7 @@ export default function BookingsPage() {
               <Dropdown
                 label="Quota" name="Quota"
                 value={form.Quota} onChange={handleChange}
-                options={[{value:'GN', label:'General'},{value:'TQ', label:'Tatkal'},{value:'LD', label:'Ladies'}]} placeholder={false}
+                options={QUOTA_OPTS} placeholder={false}
               />
             </FormRow>
 

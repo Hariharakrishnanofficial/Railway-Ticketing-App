@@ -11,6 +11,7 @@ import {
 } from '../services/api';
 import { useApi } from '../hooks/useApi';
 import { useToast } from '../context/ToastContext';
+import { useSettings } from '../context/SettingsContext';
 import { PageHeader, Button, Card, Input, Modal, Spinner } from '../components/UI';
 import { Field, Dropdown, FormRow, FormDivider, FormActions, FormApiError, DebugRecord } from '../components/FormFields';
 
@@ -19,26 +20,6 @@ const FONT = "'Inter','Segoe UI',system-ui,-apple-system,sans-serif";
 const MONO = "'JetBrains Mono','Fira Code','Courier New',monospace";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
-const TRAIN_TYPES = [
-  'Superfast', 'Express', 'Mail', 'Passenger',
-  'Rajdhani', 'Shatabdi', 'Duronto', 'Vande Bharat',
-  'Tejas', 'Garib Rath', 'Other',
-];
-const RUN_DAYS_OPTS = [
-  { value: 'Daily', label: 'Daily' },
-  { value: 'Mon', label: 'Monday' },
-  { value: 'Tue', label: 'Tuesday' },
-  { value: 'Wed', label: 'Wednesday' },
-  { value: 'Thu', label: 'Thursday' },
-  { value: 'Fri', label: 'Friday' },
-  { value: 'Sat', label: 'Saturday' },
-  { value: 'Sun', label: 'Sunday' },
-  { value: 'Mon,Wed,Fri', label: 'Mon / Wed / Fri' },
-  { value: 'Tue,Thu,Sat', label: 'Tue / Thu / Sat' },
-  { value: 'Mon,Tue,Wed,Thu,Fri', label: 'Weekdays' },
-  { value: 'Sat,Sun', label: 'Weekends' },
-];
-
 const BLANK = {
   Train_Number: '', Train_Name: '', Train_Type: 'Express',
   From_Station: '', To_Station: '',
@@ -252,6 +233,7 @@ function TrainsTable({ rows, loading, onEdit, onDelete, onView, deleting }) {
 // ─── Main TrainsPage ───────────────────────────────────────────────────────────
 export default function TrainsPage() {
   const { addToast } = useToast();
+  const { getDropdownOptions } = useSettings();
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(null); // null | 'create' | 'edit' | 'view' | 'delete'
   const [editRow, setEditRow] = useState(null);
@@ -274,6 +256,11 @@ export default function TrainsPage() {
     value: s.ID,
     label: `${s.Station_Code} – ${s.Station_Name}`,
   }));
+
+  // -- Get dropdown options from settings --
+  const TRAIN_TYPES = getDropdownOptions('train_types');
+  const RUN_DAYS_OPTS = getDropdownOptions('run_days');
+  const RUNNING_STATUS_OPTS = getDropdownOptions('running_status');
 
   // ── Filter ──
   const filtered = rows.filter(r =>
@@ -443,7 +430,7 @@ export default function TrainsPage() {
                 onChange={handleChange} required placeholder="e.g. 12678"
                 error={errors.Train_Number} mono />
               <Dropdown label="Train Type" name="Train_Type" value={form.Train_Type}
-                onChange={handleChange} options={TRAIN_TYPES} placeholder={false} />
+                onChange={handleChange} options={TRAIN_TYPES.map(t => t.value)} placeholder={false} />
             </FormRow>
             <Field label="Train Name *" name="Train_Name" value={form.Train_Name}
               onChange={handleChange} required placeholder="e.g. Chennai Rajdhani Express"
@@ -481,7 +468,7 @@ export default function TrainsPage() {
             {/* Running Status */}
             <FormRow cols={2}>
               <Dropdown label="Running Status" name="Running_Status" value={form.Running_Status}
-                onChange={handleChange} options={[{ value: 'On Time', label: 'On Time' }, { value: 'Delayed', label: 'Delayed' }, { value: 'Cancelled', label: 'Cancelled' }]} placeholder={false} />
+                onChange={handleChange} options={RUNNING_STATUS_OPTS} placeholder={false} />
               <Field label="Delay (Minutes)" name="Delay_Minutes" value={form.Delay_Minutes}
                 onChange={handleChange} type="number" placeholder="e.g. 15" />
             </FormRow>

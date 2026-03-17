@@ -8,37 +8,34 @@
  *  5. handleSubmit uses finally{} so setLoading always resets
  *  6. userData guard before sessionStorage.setItem
  */
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   trainsApi, bookingsApi, stationsApi, authApi, connectingTrainsApi, faresApi,
   extractRecords, getRecordId, extractTime,
 } from '../services/api';
 import { useApi } from '../hooks/useApi';
 import { useToast } from '../context/ToastContext';
+import { useSettings } from '../context/SettingsContext';
 import { PageHeader, Card, Icon, Spinner } from '../components/UI';
+import LoginModal from '../components/LoginModal';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const IRCTC_CLASSES = [
-  { value: 'SL', label: 'SL — Sleeper Class' },
-  { value: '3A', label: '3A — AC 3 Tier' },
-  { value: '2A', label: '2A — AC 2 Tier' },
-  { value: '1A', label: '1A — AC First Class' },
-  { value: 'CC', label: 'CC — AC Chair Car' },
-  { value: 'EC', label: 'EC — Executive Chair Car' },
-  { value: '2S', label: '2S — Second Sitting' },
-  { value: 'FC', label: 'FC — First Class' },
-];
-const IRCTC_QUOTAS = [
-  { value: 'GN', label: 'GN — General Quota' },
-  { value: 'TQ', label: 'TQ — Tatkal' },
-  { value: 'PT', label: 'PT — Premium Tatkal' },
-  { value: 'LD', label: 'LD — Ladies Quota' },
-  { value: 'SS', label: 'SS — Senior Citizen' },
-  { value: 'HP', label: 'HP — Physically Handicapped' },
-  { value: 'DF', label: 'DF — Defence Quota' },
-];
 const IRCTC_GENDERS = ['Male', 'Female', 'Transgender'];
 const IRCTC_BERTHS  = ['No Preference', 'Lower', 'Middle', 'Upper', 'Side Lower', 'Side Upper'];
+const IRCTC_CLASSES = [
+  { value: 'SL', label: 'Sleeper' },
+  { value: '3A', label: 'AC 3 Tier' },
+  { value: '2A', label: 'AC 2 Tier' },
+  { value: '1A', label: 'AC First' },
+  { value: 'CC', label: 'Chair Car' },
+  { value: 'EC', label: 'Exec Chair' },
+  { value: '2S', label: '2nd Sitting' },
+];
+const IRCTC_QUOTAS = [
+  { value: 'GN', label: 'General' },
+  { value: 'TQ', label: 'Tatkal' },
+  { value: 'SS', label: 'Senior' },
+];
 
 const CLASS_FARE_KEY  = { SL: 'Fare_SL', '3A': 'Fare_3A', '2A': 'Fare_2A', '1A': 'Fare_1A', CC: 'Fare_CC', EC: 'Fare_EC', '2S': 'Fare_2S', FC: 'Fare_1A' };
 const CLASS_SEATS_KEY = { SL: 'Total_Seats_SL', '3A': 'Total_Seats_3A', '2A': 'Total_Seats_2A', '1A': 'Total_Seats_1A', CC: 'Total_Seats_CC', EC: 'Total_Seats_CC', '2S': 'Total_Seats_SL', FC: 'Total_Seats_1A' };
@@ -84,7 +81,174 @@ const labelBase = {
 
 function today() { return new Date().toISOString().split('T')[0]; }
 
-// ─── Parse Zoho date string → "YYYY-MM-DD" for comparison ─────────────────────
+// ─── StationAutocomplete ──────────────────────────────────────────────────────
+function StationAutocomplete({ label, value, onChange, stations, placeholder, id }) {
+  const [query,   setQuery]   = useState('');
+  const [open,    setOpen]    = useState(false);
+  const [focused, setFocused] = useState(null); // keyboard highlight index
+  const wrapRef = useRef(null);
+  const inputId = id || `station-ac-${label.toLowerCase().replace(/\s+/g, '-')}`;
+
+  // Display label for current value
+  const valueLabel = value
+    ? (stations.find(s => (s.Station_Code || s.ID) === value || String(s.ID) === String(value))
+        ?.Station_Code || value)
+    : '';
+
+  // Filter list
+  const q = query.toLowerCase().trim();
+  const filtered = q
+    ? stations.filter(s =>
+        (s.Station_Name || '').toLowerCase().includes(q) ||
+        (s.Station_Code || '').toLowerCase().includes(q)
+      ).slice(0, 8)
+    : stations.slice(0, 8);
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = e => { if (!wrapRef.current?.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const selectStation = s => {
+    onChange(s.Station_Code || String(s.ID));
+    setQuery('');
+    setOpen(false);
+    setFocused(null);
+  };
+
+  const handleKeyDown = e => {
+    if (!open) { if (e.key === 'ArrowDown' || e.key === 'Enter') setOpen(true); return; }
+    if (e.key === 'ArrowDown')  { e.preventDefault(); setFocused(f => Math.min((f ?? -1) + 1, filtered.length - 1)); }
+    if (e.key === 'ArrowUp')    { e.preventDefault(); setFocused(f => Math.max((f ?? 0) - 1, 0)); }
+    if (e.key === 'Enter' && focused !== null && filtered[focused]) { selectStation(filtered[focused]); }
+    if (e.key === 'Escape')     { setOpen(false); setFocused(null); }
+  };
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative', flex: '1 1 180px' }}>
+      <label htmlFor={inputId} style={{
+        display: 'block', fontSize: 11, fontWeight: 600, color: '#6b7280',
+        textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5, fontFamily: FONT,
+      }}>{label} *</label>
+      <div style={{ position: 'relative' }}>
+        <input
+          id={inputId}
+          type="text"
+          role="combobox"
+          aria-expanded={open}
+          aria-autocomplete="list"
+          aria-label={label}
+          value={open ? query : valueLabel}
+          onChange={e => { setQuery(e.target.value); setOpen(true); setFocused(null); }}
+          onFocus={() => { setOpen(true); setQuery(''); }}
+          onBlur={() => setTimeout(() => setOpen(false), 160)}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder || `Search ${label}…`}
+          style={{
+            ...inputBase, paddingRight: value ? 32 : 14,
+            borderColor: open ? '#2563eb' : '#1e2433',
+          }}
+        />
+        {value && !open && (
+          <button
+            type="button"
+            onClick={() => { onChange(''); setQuery(''); }}
+            aria-label="Clear station"
+            style={{
+              position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+              background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 14, padding: 2,
+            }}>×</button>
+        )}
+      </div>
+      {open && filtered.length > 0 && (
+        <ul
+          role="listbox"
+          style={{
+            position: 'absolute', zIndex: 200, top: 'calc(100% + 4px)', left: 0, right: 0,
+            background: '#111827', border: '1px solid #1e2433', borderRadius: 8,
+            padding: 4, margin: 0, listStyle: 'none',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+            maxHeight: 240, overflowY: 'auto',
+          }}
+        >
+          {filtered.map((s, i) => (
+            <li
+              key={s.ID || s.Station_Code}
+              role="option"
+              aria-selected={i === focused}
+              onMouseDown={() => selectStation(s)}
+              onMouseEnter={() => setFocused(i)}
+              style={{
+                padding: '9px 12px', borderRadius: 6, cursor: 'pointer', fontFamily: FONT,
+                background: i === focused ? 'rgba(37,99,235,0.15)' : 'transparent',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              }}
+            >
+              <div>
+                <span style={{ fontSize: 13, fontWeight: 600, color: '#e5e7eb' }}>{s.Station_Name || s.Station_Code}</span>
+                <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 6 }}>{s.State || ''}</span>
+              </div>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', fontFamily: "'JetBrains Mono', monospace" }}>{s.Station_Code}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ─── ClassCards selector ──────────────────────────────────────────────────────
+const CLASS_META = {
+  SL:  { icon: '🪑', desc: 'Sleeper',        color: '#3b82f6' },
+  '3A':{ icon: '❄️', desc: 'AC 3 Tier',      color: '#0ea5e9' },
+  '2A':{ icon: '🛏️', desc: 'AC 2 Tier',      color: '#6366f1' },
+  '1A':{ icon: '👑', desc: 'AC First',        color: '#8b5cf6' },
+  CC:  { icon: '💺', desc: 'Chair Car',       color: '#10b981' },
+  EC:  { icon: '✨', desc: 'Exec Chair',      color: '#f59e0b' },
+  '2S':{ icon: '🚋', desc: '2nd Sitting',    color: '#6b7280' },
+};
+function ClassCards({ value, onChange, classes }) {
+  return (
+    <div style={{ flex: '1 1 100%' }}>
+      <div style={{
+        display: 'block', fontSize: 11, fontWeight: 600, color: '#6b7280',
+        textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8, fontFamily: FONT,
+      }}>Class</div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {(classes || []).map(c => {
+          const meta    = CLASS_META[c.value] || {};
+          const active  = value === c.value;
+          return (
+            <button key={c.value} type="button"
+              onClick={() => onChange(c.value)}
+              title={c.label}
+              aria-pressed={active}
+              style={{
+                padding: '6px 12px', borderRadius: 8,
+                border: `1.5px solid ${active ? (meta.color || '#2563eb') : '#1e2433'}`,
+                background: active ? `${meta.color || '#2563eb'}18` : 'transparent',
+                color: active ? (meta.color || '#60a5fa') : '#6b7280',
+                cursor: 'pointer', fontFamily: FONT, fontSize: 12, fontWeight: active ? 700 : 400,
+                display: 'flex', alignItems: 'center', gap: 5,
+                transition: 'all 0.15s',
+              }}
+              onMouseEnter={e => { if (!active) { e.currentTarget.style.borderColor = '#374151'; e.currentTarget.style.color = '#9ca3af'; } }}
+              onMouseLeave={e => { if (!active) { e.currentTarget.style.borderColor = '#1e2433'; e.currentTarget.style.color = '#6b7280'; } }}
+            >
+              <span>{meta.icon}</span>
+              <span>{c.value}</span>
+              <span style={{ fontSize: 10, opacity: 0.7 }}>· {meta.desc}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Parse Zoho date string → "YYYY-MM-DD" for comparison ────────────────────
 function parseTrainDate(dateStr) {
   if (!dateStr) return null;
   const s = String(dateStr).trim();
@@ -134,10 +298,18 @@ function TrainCard({ train, selectedClass, onBook }) {
   const toR   = train.To_Station   || train.Destination_Station;
   const from  = typeof fromR === 'object' ? (fromR?.display_value || '—') : (fromR || '—');
   const to    = typeof toR   === 'object' ? (toR?.display_value   || '—') : (toR   || '—');
-  const cls   = selectedClass || 'SL';
-  const fare  = train[CLASS_FARE_KEY[cls]  || 'Fare_SL'];
-  const seats = train[CLASS_SEATS_KEY[cls] || 'Total_Seats_SL'];
+  const cls    = selectedClass || 'SL';
+  const fare   = train[CLASS_FARE_KEY[cls]  || 'Fare_SL'];
+  const seats  = Number(train[CLASS_SEATS_KEY[cls] || 'Total_Seats_SL']) || 0;
   const depDate = parseTrainDate(train.Departure_Time);
+
+  // Colour-coded availability
+  const avail = (() => {
+    if (seats > 20)  return { label: `${seats} Avail`, bg: '#0f2a1e', color: '#22c55e', border: '#14532d' };
+    if (seats > 0)   return { label: `${seats} Left`,  bg: '#1a1a00', color: '#fbbf24', border: '#854d0e' };
+    if (seats === 0) return { label: 'WL',             bg: '#2a0a0a', color: '#f87171', border: '#991b1b' };
+    return               { label: 'Avail',             bg: '#0f2a1e', color: '#22c55e', border: '#14532d' };
+  })();
 
   return (
     <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 10, marginBottom: 10, overflow: 'hidden', transition: 'border-color 0.15s' }}
@@ -190,11 +362,13 @@ function TrainCard({ train, selectedClass, onBook }) {
             <div style={{ fontSize: 13, color: '#6b7280', fontFamily: FONT }}>Fare N/A</div>
           )}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            {seats != null && seats !== '' && (
-              <span style={{ fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 20, background: '#0f2a1e', color: '#22c55e', border: '1px solid #14532d', fontFamily: FONT }}>
-                {seats} seats
-              </span>
-            )}
+            <span style={{
+              fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 20,
+              background: avail.bg, color: avail.color, border: `1px solid ${avail.border}`,
+              fontFamily: FONT,
+            }}>
+              {avail.label}
+            </span>
             <button
               onClick={() => setShowDetails(d => !d)}
               style={{ padding: '7px 14px', borderRadius: 7, border: '1px solid #1e2433', background: showDetails ? 'rgba(59,130,246,0.1)' : 'transparent', color: showDetails ? '#60a5fa' : '#6b7280', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: FONT }}>
@@ -245,145 +419,6 @@ function TrainCard({ train, selectedClass, onBook }) {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// ─── Inline Login Modal overlay ───────────────────────────────────────────────
-function LoginModal({ onLogin, onCancel }) {
-  const { addToast } = useToast();
-  const [mode, setMode]     = useState('login');
-  const [loading, setLoading] = useState(false);
-  const [form, setForm]     = useState({ Full_Name: '', Email: '', Password: '', Phone_Number: '' });
-  const [errors, setErrors] = useState({});
-
-  const iS = { ...inputBase, padding: '11px 14px' };
-  const lS = { ...labelBase };
-
-  const hc = e => {
-    const { name, value } = e.target;
-    setForm(f => ({ ...f, [name]: value }));
-    if (errors[name]) setErrors(er => ({ ...er, [name]: '' }));
-  };
-
-  const validate = () => {
-    const e = {};
-    if (mode === 'register' && !form.Full_Name.trim()) e.Full_Name = 'Required';
-    if (!form.Email.trim() || !/\S+@\S+\.\S+/.test(form.Email)) e.Email = 'Valid email required';
-    if (!form.Password || form.Password.length < 6) e.Password = 'Min 6 characters';
-    return e;
-  };
-
-  const handleSubmit = async () => {
-    const errs = validate();
-    if (Object.keys(errs).length) { setErrors(errs); return; }
-    setLoading(true);
-    try {
-      if (mode === 'login') {
-        const res = await authApi.login({ Email: form.Email, Password: form.Password });
-        if (res?.success === false) throw new Error(res.error || 'Login failed');
-        // Safely extract user object
-        const userData = res?.user ?? res?.data?.data ?? res?.data ?? res;
-        if (!userData || typeof userData !== 'object' || Array.isArray(userData)) {
-          throw new Error('Invalid response from server. Check API.');
-        }
-        sessionStorage.setItem('rail_user', JSON.stringify(userData));
-        addToast(`Welcome back, ${userData.Full_Name || 'User'}!`, 'success');
-        onLogin(userData);
-      } else {
-        const res = await authApi.register({ Full_Name: form.Full_Name, Email: form.Email, Password: form.Password, Phone_Number: form.Phone_Number });
-        if (res?.success === false) throw new Error(res.error || 'Registration failed');
-        addToast('Account created. Please sign in.', 'success');
-        setMode('login');
-        setForm(f => ({ ...f, Full_Name: '', Password: '', Phone_Number: '' }));
-      }
-    } catch (err) {
-      addToast(err.message || 'Something went wrong', 'error');
-    } finally {
-      setLoading(false); // always resets — prevents frozen spinner
-    }
-  };
-
-  return (
-    // Overlay backdrop
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-      onClick={e => { if (e.target === e.currentTarget) onCancel(); }}>
-
-      <div style={{ width: '100%', maxWidth: 400, background: '#0e1117', border: '1px solid #1e2433', borderRadius: 14, padding: 28, boxShadow: '0 24px 80px rgba(0,0,0,0.6)', fontFamily: FONT }}>
-
-        {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: '#f3f4f6', fontFamily: FONT }}>
-              {mode === 'login' ? 'Sign In' : 'Create Account'}
-            </div>
-            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2, fontFamily: FONT }}>
-              {mode === 'login' ? 'Sign in to book tickets' : 'Register a new account'}
-            </div>
-          </div>
-          <button onClick={onCancel} style={{ width: 30, height: 30, borderRadius: 7, border: '1px solid #1e2433', background: 'transparent', color: '#6b7280', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONT }}>×</button>
-        </div>
-
-        {/* Tab switcher */}
-        <div style={{ display: 'flex', background: '#080b11', border: '1px solid #1e2433', borderRadius: 8, padding: 3, marginBottom: 20, gap: 3 }}>
-          {['login', 'register'].map(t => (
-            <button key={t} onClick={() => { setMode(t); setErrors({}); }}
-              style={{ flex: 1, padding: '8px', borderRadius: 6, border: 'none', cursor: 'pointer', fontFamily: FONT, fontSize: 13, fontWeight: 600, background: mode === t ? '#2563eb' : 'transparent', color: mode === t ? '#fff' : '#6b7280' }}>
-              {t === 'login' ? 'Sign In' : 'Register'}
-            </button>
-          ))}
-        </div>
-
-        {/* Fields */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
-          {mode === 'register' && (
-            <div>
-              <label style={lS}>Full Name</label>
-              <input name="Full_Name" value={form.Full_Name} onChange={hc} placeholder="Rahul Sharma"
-                style={{ ...iS, borderColor: errors.Full_Name ? '#ef4444' : '#1e2433' }}
-                onFocus={e => e.target.style.borderColor = '#2563eb'} onBlur={e => e.target.style.borderColor = errors.Full_Name ? '#ef4444' : '#1e2433'} />
-              {errors.Full_Name && <p style={{ margin: '4px 0 0', fontSize: 11, color: '#f87171', fontFamily: FONT }}>{errors.Full_Name}</p>}
-            </div>
-          )}
-          <div>
-            <label style={lS}>Email Address</label>
-            <input name="Email" value={form.Email} onChange={hc} type="email" placeholder="you@example.com"
-              style={{ ...iS, borderColor: errors.Email ? '#ef4444' : '#1e2433' }}
-              onFocus={e => e.target.style.borderColor = '#2563eb'} onBlur={e => e.target.style.borderColor = errors.Email ? '#ef4444' : '#1e2433'} />
-            {errors.Email && <p style={{ margin: '4px 0 0', fontSize: 11, color: '#f87171', fontFamily: FONT }}>{errors.Email}</p>}
-          </div>
-          <div>
-            <label style={lS}>Password</label>
-            <input name="Password" value={form.Password} onChange={hc} type="password" placeholder="Min. 6 characters"
-              style={{ ...iS, borderColor: errors.Password ? '#ef4444' : '#1e2433' }}
-              onFocus={e => e.target.style.borderColor = '#2563eb'} onBlur={e => e.target.style.borderColor = errors.Password ? '#ef4444' : '#1e2433'}
-              onKeyDown={e => { if (e.key === 'Enter') handleSubmit(); }} />
-            {errors.Password && <p style={{ margin: '4px 0 0', fontSize: 11, color: '#f87171', fontFamily: FONT }}>{errors.Password}</p>}
-          </div>
-          {mode === 'register' && (
-            <div>
-              <label style={lS}>Phone Number</label>
-              <input name="Phone_Number" value={form.Phone_Number} onChange={hc} type="tel" placeholder="9876543210"
-                style={{ ...iS, borderColor: '#1e2433' }}
-                onFocus={e => e.target.style.borderColor = '#2563eb'} onBlur={e => e.target.style.borderColor = '#1e2433'} />
-            </div>
-          )}
-        </div>
-
-        {/* Submit */}
-        <button onClick={handleSubmit} disabled={loading}
-          style={{ width: '100%', marginTop: 20, padding: '12px', borderRadius: 8, border: 'none', fontFamily: FONT, fontSize: 14, fontWeight: 600, cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: loading ? '#1e2433' : '#2563eb', color: loading ? '#6b7280' : '#fff', transition: 'background 0.15s' }}>
-          {loading
-            ? <><Spinner size={16} color="#6b7280" />{mode === 'login' ? 'Signing in...' : 'Creating account...'}</>
-            : mode === 'login' ? 'Sign In' : 'Create Account'}
-        </button>
-
-        <p style={{ marginTop: 14, textAlign: 'center', fontSize: 12, color: '#6b7280', fontFamily: FONT }}>
-          {mode === 'login'
-            ? <>No account?{' '}<span onClick={() => { setMode('register'); setErrors({}); }} style={{ color: '#60a5fa', cursor: 'pointer', fontWeight: 600 }}>Register here</span></>
-            : <>Have an account?{' '}<span onClick={() => { setMode('login'); setErrors({}); }} style={{ color: '#60a5fa', cursor: 'pointer', fontWeight: 600 }}>Sign in</span></>}
-        </p>
-      </div>
     </div>
   );
 }
@@ -848,28 +883,63 @@ function PNRConfirmation({ booking, train, bookingData, onDone }) {
 // ─── Main SearchPage ──────────────────────────────────────────────────────────
 export default function SearchPage() {
   const { addToast } = useToast();
-  const todayStr = today();
+  const { getDropdownOptions } = useSettings();
 
+  // ─── State variables ──────────────────────────────────────────────────────
+  const [step, setStep] = useState(null); // null: search, 0: passengers, 1: payment, 2: confirmation
   const [user, setUser] = useState(() => {
-    try { return JSON.parse(sessionStorage.getItem('rail_user')); } catch { return null; }
+    try {
+      const u = sessionStorage.getItem('rail_user');
+      return u ? JSON.parse(u) : null;
+    } catch { return null; }
   });
-  const [form, setForm]               = useState({ from: '', to: '', date: '', seat_class: 'SL' });
-  const [results, setResults]         = useState(null);
-  const [loading, setLoading]         = useState(false);
-  const [step, setStep]               = useState(null);
+
+  // Search form
+  const [form, setForm] = useState({
+    from: '', to: '', date: new Date().toISOString().split('T')[0], class: 'SL', quota: ''
+  });
+
+  // Search results
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState([]);
+  const [connecting, setConnecting] = useState(null);
+  const [viaTrains, setViaTrains] = useState(null);
+  const [searchTab, setSearchTab] = useState('direct'); // 'direct', 'via', 'connecting'
+
+  // Booking flow
   const [selectedTrain, setSelectedTrain] = useState(null);
   const [bookingData, setBookingData] = useState(null);
-  const [booking, setBooking]         = useState(null);
-  const [paying, setPaying]           = useState(false);
-  const [showLogin, setShowLogin]     = useState(false);
-  const [connecting, setConnecting]   = useState(null); // null | []
-  const [viaTrains, setViaTrains]     = useState(null); // null | [] — trains passing through a station
-  const [searchTab, setSearchTab]     = useState('direct'); // 'direct' | 'connecting' | 'via'
+  const [booking, setBooking] = useState(null);
+  const [paying, setPaying] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
+  
+  // Stations list for autocomplete
+  const [stations, setStations] = useState([]);
+  const [stationsLoading, setStationsLoading] = useState(true);
 
-  const fetchSt = useCallback(() => stationsApi.getAll(), []);
-  const { data: stData } = useApi(fetchSt);
-  const stations = extractRecords(stData);
-  const stOpts   = stations.map(s => ({ value: s.Station_Code || s.ID, label: `${s.Station_Code} – ${s.Station_Name}` }));
+  const classes = getDropdownOptions('dropdown_classes');
+  const quotas = getDropdownOptions('dropdown_quotas');
+
+  // Fetch stations on component mount
+  useEffect(() => {
+    const fetchStations = async () => {
+      try {
+        setStationsLoading(true);
+        const res = await stationsApi.getAll({ limit: 1000 });
+        const stationRecords = extractRecords(res);
+        setStations(stationRecords);
+      } catch (err) {
+        console.error('Error fetching stations:', err);
+        addToast('Failed to load stations', 'error');
+      } finally {
+        setStationsLoading(false);
+      }
+    };
+    fetchStations();
+  }, []);
+
+  // Computed: today's date in YYYY-MM-DD format
+  const todayStr = new Date().toISOString().split('T')[0];
 
   const handleChange = e => setForm(f => ({ ...f, [e.target.name]: e.target.value }));
   const swapSt = () => setForm(f => ({ ...f, from: f.to, to: f.from }));
@@ -972,6 +1042,19 @@ export default function SearchPage() {
     if (selectedTrain) setStep(0);
   };
 
+  const handleLogout = () => {
+    setUser(null);
+    sessionStorage.removeItem('rail_user');
+    // Also clear any auth tokens
+    sessionStorage.removeItem('rail_access_token');
+    localStorage.removeItem('rail_refresh_token');
+    setSelectedTrain(null);
+    setBookingData(null);
+    setBooking(null);
+    setResults([]);
+    addToast('Logged out successfully', 'success');
+  };
+
   const handlePay = async (paymentInfo) => {
     setPaying(true);
     try {
@@ -1058,102 +1141,52 @@ export default function SearchPage() {
 
   // ── Search view ──
   return (
-    <div>
-      {/* Header with Sign In button top-right */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <h1 style={{ margin: '0 0 3px', fontSize: 20, fontWeight: 700, color: 'var(--text-primary)', fontFamily: FONT }}>Train Search</h1>
-          <p style={{ margin: 0, fontSize: 13, color: '#6b7280', fontFamily: FONT }}>Find and book trains between stations</p>
-        </div>
-        {/* Sign In button — top right, always visible */}
-        {/* {!user ? (
-          <button
-            onClick={() => setShowLogin(true)}
-            style={{ padding: '9px 20px', borderRadius: 8, border: '1px solid #2563eb', background: 'rgba(37,99,235,0.08)', color: '#60a5fa', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: FONT, display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0 }}>
-            <Icon name="users" size={14} />
-            Sign In
-          </button>
-        ) : (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 14px', background: '#0f2a1e', border: '1px solid #14532d', borderRadius: 8 }}>
-            <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#14532d', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Icon name="users" size={13} style={{ color: '#22c55e' }} />
-            </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: '#22c55e', fontFamily: FONT }}>{user.Full_Name || user.Email || 'User'}</div>
-              <button onClick={() => { sessionStorage.removeItem('rail_user'); setUser(null); }}
-                style={{ fontSize: 10, color: '#4b5563', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: FONT }}>
-                Sign out
+    <div style={{ maxWidth: 1000, margin: '0 auto', padding: '0 20px 40px' }}>
+      <PageHeader
+        title="Search Trains"
+        subtitle="Find and book your next journey"
+        actions={
+          !user ? (
+            <button onClick={() => setShowLogin(true)} style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid #2563eb', background: 'transparent', color: '#60a5fa', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+              <Icon name="user" size={13} style={{ marginRight: 6, verticalAlign: -2 }} />
+              Sign In
+            </button>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ fontSize: 12, color: '#9ca3af' }}>Welcome, <strong style={{ color: '#e5e7eb' }}>{user.Full_Name}</strong></span>
+              <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid #ef4444', background: 'transparent', color: '#f87171', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                Logout
               </button>
             </div>
+          )
+        }
+      />
+
+      {step === null && <StepBar step={0} />}
+
+      {/* Search Form — shown in main search view (not during booking) */}
+      {step === null && (
+        <Card style={{ marginBottom: 24 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto auto', gap: 12, alignItems: 'flex-end', marginBottom: 16, flexWrap: 'wrap' }}>
+            <StationAutocomplete label="From Station" value={form.from} onChange={v => setForm(f => ({ ...f, from: v }))} stations={stations} placeholder="Departure" />
+            <StationAutocomplete label="To Station" value={form.to} onChange={v => setForm(f => ({ ...f, to: v }))} stations={stations} placeholder="Arrival" />
+            <div>
+              <label style={lS}>Journey Date *</label>
+              <input type="date" name="date" value={form.date} min={todayStr} onChange={handleChange} style={{ ...iS, cursor: 'pointer' }} />
+            </div>
+            <button onClick={swapSt} type="button" title="Swap stations" style={{ width: 40, height: 40, padding: 0, borderRadius: 8, border: '1px solid #1e2433', background: 'transparent', color: '#6b7280', cursor: 'pointer', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s', marginTop: 15 }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#080b11'; e.currentTarget.style.color = '#9ca3af'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#6b7280'; }}>⇅</button>
+            <button onClick={handleSearch} disabled={loading} type="button" style={{ padding: '10px 22px', borderRadius: 8, border: 'none', background: loading ? '#1e2433' : '#2563eb', color: loading ? '#6b7280' : '#fff', fontSize: 13, fontWeight: 600, cursor: loading ? 'not-allowed' : 'pointer', fontFamily: FONT, marginTop: 15, display: 'flex', alignItems: 'center', gap: 6 }}>
+              {loading ? <><Spinner size={14} color="#6b7280" />Searching...</> : <>🔍 Search</>}
+            </button>
           </div>
-        )} */}
-      </div>
-
-      {/* Search form */}
-      <Card style={{ marginBottom: 20 }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
-          <div style={{ flex: '1 1 180px' }}>
-            <label style={lS}>From Station *</label>
-            <select name="from" value={form.from} onChange={handleChange} style={{ ...iS, cursor: 'pointer' }}
-              onFocus={e => e.target.style.borderColor = '#2563eb'} onBlur={e => e.target.style.borderColor = '#1e2433'}>
-              <option value="">Select departure</option>
-              {stOpts.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-            </select>
-          </div>
-
-          <button onClick={swapSt} title="Swap stations"
-            style={{ width: 38, height: 38, borderRadius: 8, background: '#080b11', border: '1px solid #1e2433', color: '#6b7280', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', alignSelf: 'flex-end', flexShrink: 0 }}
-            onMouseEnter={e => e.currentTarget.style.color = '#60a5fa'} onMouseLeave={e => e.currentTarget.style.color = '#6b7280'}>
-            <Icon name="arrowSwap" size={16} />
-          </button>
-
-          <div style={{ flex: '1 1 180px' }}>
-            <label style={lS}>To Station *</label>
-            <select name="to" value={form.to} onChange={handleChange} style={{ ...iS, cursor: 'pointer' }}
-              onFocus={e => e.target.style.borderColor = '#2563eb'} onBlur={e => e.target.style.borderColor = '#1e2433'}>
-              <option value="">Select destination</option>
-              {stOpts.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-            </select>
-          </div>
-
-          <div style={{ flex: '1 1 160px' }}>
-            <label style={lS}>Journey Date *</label>
-            <input name="date" value={form.date} onChange={handleChange} type="date" min={todayStr}
-              style={{ ...iS, cursor: 'pointer' }}
-              onFocus={e => e.target.style.borderColor = '#2563eb'} onBlur={e => e.target.style.borderColor = '#1e2433'} />
-          </div>
-
-          <div style={{ flex: '1 1 130px' }}>
-            <label style={lS}>Class</label>
-            <select name="seat_class" value={form.seat_class} onChange={handleChange} style={{ ...iS, cursor: 'pointer' }}>
-              {IRCTC_CLASSES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-            </select>
-          </div>
-
-          <button onClick={handleSearch} disabled={loading}
-            style={{ padding: '10px 22px', borderRadius: 8, border: 'none', background: loading ? '#1e2433' : '#dc2626', color: loading ? '#6b7280' : '#fff', fontFamily: FONT, fontSize: 13, fontWeight: 600, cursor: loading ? 'not-allowed' : 'pointer', alignSelf: 'flex-end', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 7 }}>
-            <Icon name="search" size={15} />
-            {loading ? 'Searching...' : 'Search'}
-          </button>
-        </div>
-      </Card>
-
-      {/* Login modal (overlay) */}
-      {showLogin && (
-        <LoginModal
-          onLogin={handleLoginSuccess}
-          onCancel={() => { setShowLogin(false); setSelectedTrain(null); }}
-        />
+          {/* Class & Quota row */}
+          <ClassCards value={form.class} onChange={v => setForm(f => ({ ...f, class: v }))} classes={classes || []} />
+        </Card>
       )}
 
-      {/* Loading spinner */}
-      {loading && (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: 52 }}>
-          <Spinner size={32} color="#2563eb" />
-        </div>
-      )}
-
-      {/* Results */}
+      {/* Search Results */}
       {!loading && results !== null && (
         <>
           {/* Tab bar */}
@@ -1231,42 +1264,72 @@ export default function SearchPage() {
                   const via  = conn.via_station || conn.connecting_station || '—';
                   const mins = conn.transfer_mins || conn.transfer_minutes || '—';
                   return (
-                    <div key={i} style={{ background:'var(--bg-elevated)', border:'1px solid var(--border)', borderRadius:10, marginBottom:12, overflow:'hidden' }}>
-                      <div style={{ padding:'8px 16px', background:'rgba(139,92,246,0.1)', borderBottom:'1px solid #2d1f52', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                        <span style={{ fontSize:12, fontWeight:700, color:'#a78bfa', fontFamily:FONT }}>
-                          🔗 Via {via}
+                    <div key={i} style={{ background:'var(--bg-elevated)', border:'1px solid var(--border)',
+                               borderRadius:10, marginBottom:12, overflow:'hidden' }}>
+                      <div style={{ padding:'8px 16px', background:'rgba(139,92,246,0.08)',
+                                    borderBottom:'1px solid rgba(139,92,246,0.15)',
+                                    display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                        <span style={{ fontSize:12, fontWeight:700, color:'#f59e0b', fontFamily:FONT }}>
+                          📍 Passes through your stations
                         </span>
-                        {mins !== '—' && (
-                          <span style={{ fontSize:11, color:'#6b7280', fontFamily:FONT }}>
-                            Transfer: ~{mins} min
+                        <span style={{ fontSize:11, fontFamily:'monospace', color:'#6b7280' }}>
+                          {train.Train_Number}
+                        </span>
+                      </div>
+
+                      <div style={{ padding:'14px 16px' }}>
+                        <div style={{ fontSize:15, fontWeight:700, color:'var(--text-primary)', fontFamily:FONT, marginBottom:10 }}>
+                          {train.Train_Name}
+                          <span style={{ marginLeft:10, fontSize:11, fontWeight:500, color:'#6b7280' }}>
+                            {train.Train_Type}
                           </span>
-                        )}
-                      </div>
-                      <div style={{ padding:'14px 16px', display:'grid', gridTemplateColumns:'1fr auto 1fr', gap:12, alignItems:'center' }}>
-                        <div style={{ background:'#080b11', borderRadius:8, padding:12, border:'1px solid #1e2433' }}>
-                          <div style={{ fontSize:11, fontWeight:700, color:'#3b82f6', textTransform:'uppercase', marginBottom:6, fontFamily:FONT }}>Leg 1</div>
-                          <div style={{ fontSize:13, fontWeight:600, color:'var(--text-primary)', fontFamily:FONT }}>{leg1.Train_Name || leg1.name || '—'}</div>
-                          <div style={{ fontSize:11, fontFamily:'monospace', color:'#6b7280', marginTop:2 }}>
-                            {leg1.Train_Number || leg1.number || '—'} · {extractTime(leg1.Departure_Time)} → {extractTime(leg1.Arrival_Time)}
+                        </div>
+
+                        {/* Stop info for from → to */}
+                        <div style={{ display:'grid', gridTemplateColumns:'1fr auto 1fr', gap:12, alignItems:'center' }}>
+                          {/* FROM stop */}
+                          <div style={{ background:'#080b11', borderRadius:8, padding:12, border:'1px solid #1e2433' }}>
+                            <div style={{ fontSize:10, fontWeight:700, color:'#3b82f6', textTransform:'uppercase', marginBottom:5, fontFamily:FONT }}>
+                              Passes {form.from}
+                            </div>
+                            <div style={{ fontSize:16, fontWeight:700, fontFamily:'monospace', color:'#f3f4f6' }}>
+                              {fromStop.departure_time || fromStop.arrival_time || '—'}
+                            </div>
+                            <div style={{ fontSize:10, color:'#6b7280', marginTop:3, fontFamily:FONT }}>
+                              Seq {fromStop.sequence || '—'}
+                              {fromStop.distance_km ? ` · ${fromStop.distance_km}km` : ''}
+                            </div>
+                          </div>
+
+                          <div style={{ textAlign:'center', color:'#f59e0b', fontSize:22 }}>→</div>
+
+                          {/* TO stop */}
+                          <div style={{ background:'#080b11', borderRadius:8, padding:12, border:'1px solid #1e2433' }}>
+                            <div style={{ fontSize:10, fontWeight:700, color:'#22c55e', textTransform:'uppercase', marginBottom:5, fontFamily:FONT }}>
+                              Arrives {form.to}
+                            </div>
+                            <div style={{ fontSize:16, fontWeight:700, fontFamily:'monospace', color:'#f3f4f6' }}>
+                              {toStop.arrival_time || toStop.departure_time || '—'}
+                            </div>
+                            <div style={{ fontSize:10, color:'#6b7280', marginTop:3, fontFamily:FONT }}>
+                              Seq {toStop.sequence || '—'}
+                              {toStop.distance_km ? ` · ${toStop.distance_km}km` : ''}
+                            </div>
                           </div>
                         </div>
-                        <div style={{ textAlign:'center', color:'#6b7280', fontSize:20 }}>→</div>
-                        <div style={{ background:'#080b11', borderRadius:8, padding:12, border:'1px solid #1e2433' }}>
-                          <div style={{ fontSize:11, fontWeight:700, color:'#22c55e', textTransform:'uppercase', marginBottom:6, fontFamily:FONT }}>Leg 2</div>
-                          <div style={{ fontSize:13, fontWeight:600, color:'var(--text-primary)', fontFamily:FONT }}>{leg2.Train_Name || leg2.name || '—'}</div>
-                          <div style={{ fontSize:11, fontFamily:'monospace', color:'#6b7280', marginTop:2 }}>
-                            {leg2.Train_Number || leg2.number || '—'} · {extractTime(leg2.Departure_Time)} → {extractTime(leg2.Arrival_Time)}
-                          </div>
+
+                        {/* Full route hint */}
+                        <div style={{ marginTop:10, fontSize:11, color:'#4b5563', fontFamily:FONT }}>
+                          Full route: {train.From_Station?.display_value || ''} → {train.To_Station?.display_value || ''}
                         </div>
                       </div>
-                      <div style={{ padding:'8px 16px', borderTop:'1px solid #1e2433', display:'flex', justifyContent:'flex-end', gap:8 }}>
-                        <button onClick={() => handleBookClick(leg1)}
-                          style={{ padding:'7px 14px', borderRadius:7, border:'none', background:'#2563eb', color:'#fff', fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:FONT }}>
-                          Book Leg 1
-                        </button>
-                        <button onClick={() => handleBookClick(leg2)}
-                          style={{ padding:'7px 14px', borderRadius:7, border:'none', background:'rgba(37,99,235,0.3)', color:'#93c5fd', fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:FONT }}>
-                          Book Leg 2
+
+                      <div style={{ padding:'8px 16px', borderTop:'1px solid #1e2433', display:'flex', justifyContent:'flex-end' }}>
+                        <button onClick={() => handleBookClick(train)}
+                          style={{ padding:'7px 18px', borderRadius:7, border:'none',
+                                   background:'#2563eb', color:'#fff',
+                                   fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:FONT }}>
+                          Book This Train
                         </button>
                       </div>
                     </div>
@@ -1396,6 +1459,9 @@ export default function SearchPage() {
           </div>
         </Card>
       )}
+
+      {/* Login Modal */}
+      {showLogin && (<LoginModal onClose={() => setShowLogin(false)} onSuccess={handleLoginSuccess} />)}
     </div>
   );
 }

@@ -18,11 +18,29 @@ export default function ProfilePage() {
   const user = getCurrentUser();
 
   useEffect(() => {
-    if (!user?.ID) return;
+    if (!user?.ID) {
+      toast.error('User not logged in');
+      setLoading(false);
+      return;
+    }
+
     (async () => {
       try {
-        const res = await usersApi.getById(user.ID);
-        const data = res?.data?.data || res?.data || {};
+        // Try to get the user profile
+        // The API should automatically include the Authorization header via axios interceptor
+        const response = await usersApi.getById(user.ID);
+        
+        // Handle the response - check both direct data and wrapped format
+        let data = response;
+        if (response?.data && typeof response.data === 'object') {
+          // If response is wrapped, unwrap it
+          data = response.data.data || response.data;
+        }
+        
+        if (!data) {
+          throw new Error('No profile data returned');
+        }
+
         setProfile({
           Full_Name:      data.Full_Name || '',
           Phone_Number:   data.Phone_Number || '',
@@ -32,10 +50,19 @@ export default function ProfilePage() {
           ID_Proof_Number: data.ID_Proof_Number || '',
           Gender:         data.Gender || '',
         });
-      } catch (e) { toast.error('Failed to load profile'); }
-      finally { setLoading(false); }
+      } catch (err) {
+        console.error('Profile load error:', err);
+        if (err.status === 401) {
+          toast.error('Session expired. Please log in again.');
+        } else {
+          toast.error('Failed to load profile: ' + (err.message || 'Unknown error'));
+        }
+      }
+      finally {
+        setLoading(false);
+      }
     })();
-  }, []);
+  }, [user?.ID]);
 
   const handleSave = async (e) => {
     e.preventDefault();

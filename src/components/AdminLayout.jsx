@@ -19,10 +19,12 @@ const ADMIN_NAV = [
   { path: '/users',        label: 'Users',         icon: 'users'    },
   { path: '/bookings',     label: 'All Bookings',  icon: 'booking'  },
   { path: '/chart',        label: 'Seat Chart',    icon: 'seat'     },
+  { path: '/inventory',    label: 'Inventory',     icon: 'inventory'},
   { path: '/fares',        label: 'Fares',         icon: 'dollar'   },
   { path: '/announcements',label: 'Announcements', icon: 'alert'    },
   { path: '/reports',      label: 'Reports',       icon: 'health'   },
   { path: '/settings',     label: 'Settings',      icon: 'settings' },
+  { path: '/admin-logs',   label: 'Admin Logs',    icon: 'shield'   },
   { path: '/zoho-explorer',label: 'Zoho Explorer', icon: 'settings' },
 ];
 
@@ -34,10 +36,12 @@ const ACCENT = {
   '/users':        '#10b981',
   '/bookings':     '#f59e0b',
   '/chart':        '#10b981',
+  '/inventory':    '#22c55e',
   '/fares':        '#8b5cf6',
   '/announcements':'#f43f5e',
   '/reports':      '#3b82f6',
   '/settings':     '#64748b',
+  '/admin-logs':   '#ef4444',
   '/zoho-explorer': '#60a5fa',
 };
 
@@ -49,6 +53,7 @@ function Breadcrumb() {
     stations: 'Stations', users: 'Users',
     bookings: 'Bookings', fares: 'Fares',
     settings: 'Settings', overview: 'Overview',
+    inventory: 'Inventory', 'admin-logs': 'Admin Logs',
   };
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>

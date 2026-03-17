@@ -13,7 +13,7 @@ import axios from 'axios';
 //
 // DO NOT use window.location.origin as a fallback — in local dev that resolves
 // to http://localhost:<vite-port>/api/ which is the frontend, not the backend.
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/';
 
 // ─── Role helpers ─────────────────────────────────────────────────────────────
 
@@ -63,7 +63,8 @@ export function setCurrentUser(user) {
 export function isAdmin(user) {
   if (!user) user = getCurrentUser();
   if (!user) return false;
-  if (user.Email === 'admin@admin.com') return true;
+  const email = (user.Email || '').toLowerCase();
+  if (email === 'admin@admin.com' || email.endsWith('@admin.com')) return true;
   return (user.Role || '').toLowerCase() === 'admin';
 }
 
@@ -85,6 +86,18 @@ const client = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+// ─── Refresh token queue (handle concurrent 401s) ─────────────────────────────
+let _refreshing = false;
+let _refreshQueue = [];
+
+function processRefreshQueue(error, token) {
+  _refreshQueue.forEach(({ resolve, reject }) => {
+    if (error) reject(error);
+    else resolve(token);
+  });
+  _refreshQueue = [];
+}
+
 // ─── Request interceptor: inject JWT + legacy headers ─────────────────────────
 client.interceptors.request.use((config) => {
   // JWT takes priority, falls back to legacy Catalyst token
@@ -101,15 +114,6 @@ client.interceptors.request.use((config) => {
   }
   return config;
 });
-
-// ─── Response interceptor: auto-refresh on 401 + existing error handling ──────
-let _refreshing = false;
-let _refreshQueue = [];
-
-function processRefreshQueue(error, token) {
-  _refreshQueue.forEach(p => error ? p.reject(error) : p.resolve(token));
-  _refreshQueue = [];
-}
 
 client.interceptors.response.use(
   (res) => res.data,
@@ -149,6 +153,17 @@ client.interceptors.response.use(
           _refreshing = false;
         }
       }
+    }
+
+    // 403 handler — stale/wrong JWT may override valid header-based admin auth.
+    // Strip JWT and retry once with X-User-Email/Role headers only.
+    if (err.response?.status === 403 && !original._retry403) {
+      original._retry403 = true;
+      delete original.headers['Authorization'];
+      // Only clear JWT tokens, keep user session data for header-based auth
+      sessionStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(REFRESH_KEY);
+      return client(original);
     }
 
     // Auth routes: return the error JSON body as a resolved value so callers
@@ -578,4 +593,10 @@ export const analyticsApi = {
   revenue: () => client.get('/analytics/revenue'),
 };
 
-export default client;
+// Add a default export for the Axios client
+export default axios.create({
+  baseURL: BASE_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
