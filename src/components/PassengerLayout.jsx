@@ -19,6 +19,7 @@ const PASSENGER_NAV = [
   { path: '/cancel-ticket',  label: 'Cancel Ticket',  icon: 'x'                   },
   { path: '/profile',        label: 'My Profile',     icon: 'users'               },
   { path: '/change-password',label: 'Security',       icon: 'settings'            },
+  { path: '/mcp-chat',      label: 'MCP Chat',       icon: 'search'              },
 ];
 
 const ACCENT = {
@@ -31,6 +32,7 @@ const ACCENT = {
   '/cancel-ticket':  '#f87171',
   '/profile':        '#10b981',
   '/change-password':'#64748b',
+  '/mcp-chat':       '#06b6d4',
 };
 
 function Breadcrumb() {
@@ -41,6 +43,7 @@ function Breadcrumb() {
     'cancel-ticket': 'Cancel Ticket', 'my-bookings': 'My Bookings',
     'train-schedule': 'Train Schedule', 'chart-vacancy': 'Seat Chart',
     'ai-assistant': 'AI Assistant Explorer',
+    'mcp-chat': 'MCP Chat',
   };
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>

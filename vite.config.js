@@ -14,6 +14,17 @@ export default defineConfig({
         target: 'http://localhost:3002',
         changeOrigin: true,
         secure: false,
+      },
+      '/mcp': {
+        target: 'https://test-60067254082.zohomcp.in',
+        changeOrigin: true,
+        secure: true,
+      },
+      '/catalyst-llm': {
+        target: 'https://api.catalyst.zoho.in',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/catalyst-llm/, '/quickml/v2'),
       }
     }
   }

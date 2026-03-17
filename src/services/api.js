@@ -565,6 +565,14 @@ export const aiApi = {
   // Multi-turn booking assistant conversation
   chat: (message, history = []) =>
     client.post('/ai/chat', { message, history }),
+  
+  // Qwen chat (via DashScope proxy) — longer timeout for LLM responses
+  qwen: (payload) =>
+    client.post('/ai/qwen', payload, { timeout: 120000 }),
+
+  // MCP structured query execution against Zoho Creator
+  mcpQuery: (payload) =>
+    client.post('/ai/mcp-query', payload, { timeout: 30000 }),
 
   // Personalised train recommendations for a user
   recommendations: (userId, source = '', destination = '') =>
