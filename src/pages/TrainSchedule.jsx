@@ -194,19 +194,57 @@ export default function TrainSchedule() {
           ) : (
             <Card>
               {/* Train header */}
-              <div style={{ marginBottom: 24, paddingBottom: 20, borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
-                <div>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-primary)', fontFamily: 'var(--font-display)', marginBottom: 4 }}>{selected.Train_Name ?? 'Train'}</div>
-                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--accent-blue)' }}>#{selected.Train_Number ?? '—'} · {selected.Train_Type ?? ''}</div>
+              <div style={{ marginBottom: 24, paddingBottom: 20, borderBottom: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-primary)', fontFamily: 'var(--font-display)', marginBottom: 4 }}>{selected.Train_Name ?? 'Train'}</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--accent-blue)' }}>#{selected.Train_Number ?? '—'} · {selected.Train_Type ?? ''}</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    {[['Sleeper', selected.Fare_SL, '#60a5fa'], ['3AC', selected.Fare_3A, '#a78bfa'], ['2AC', selected.Fare_2A, '#f472b6']].map(([cls, fare, col]) =>
+                      fare ? (
+                        <div key={cls} style={{ textAlign: 'center' }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: col, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{cls}</div>
+                          <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-primary)', fontFamily: 'var(--font-display)' }}>₹{fare}</div>
+                        </div>
+                      ) : null
+                    )}
+                  </div>
                 </div>
-                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                  {[['Sleeper', selected.Fare_SL, '#60a5fa'], ['3AC', selected.Fare_3A, '#a78bfa'], ['2AC', selected.Fare_2A, '#f472b6']].map(([cls, fare, col]) =>
-                    fare ? (
-                      <div key={cls} style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: col, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{cls}</div>
-                        <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-primary)', fontFamily: 'var(--font-display)' }}>₹{fare}</div>
+
+                {/* Additional Train Details */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginTop: 12 }}>
+                  {selected.Departure_Time && (
+                    <div style={{ background: 'var(--bg-inset)', padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>
+                        <Icon name="clock" size={10} style={{ marginRight: 4, verticalAlign: 'middle' }} />Departure
                       </div>
-                    ) : null
+                      <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{selected.Departure_Time}</div>
+                    </div>
+                  )}
+                  {selected.Arrival_Time && (
+                    <div style={{ background: 'var(--bg-inset)', padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>
+                        <Icon name="clock" size={10} style={{ marginRight: 4, verticalAlign: 'middle' }} />Arrival
+                      </div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{selected.Arrival_Time}</div>
+                    </div>
+                  )}
+                  {selected.Run_Days && (
+                    <div style={{ background: 'var(--bg-inset)', padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>
+                        <Icon name="calendar" size={10} style={{ marginRight: 4, verticalAlign: 'middle' }} />Runs On
+                      </div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{selected.Run_Days}</div>
+                    </div>
+                  )}
+                  {selected.Is_Active !== undefined && (
+                    <div style={{ background: 'var(--bg-inset)', padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>Status</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: selected.Is_Active ? '#22c55e' : '#ef4444' }}>
+                        {selected.Is_Active ? '● Active' : '○ Inactive'}
+                      </div>
+                    </div>
                   )}
                 </div>
               </div>

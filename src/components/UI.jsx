@@ -89,6 +89,12 @@ const ICONS = {
   upcoming: (
     <><path d="M5 12h14" /><path d="M12 5l7 7-7 7" /></>
   ),
+  zap: (
+    <><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></>
+  ),
+  robot: (
+    <><rect x="3" y="11" width="18" height="10" rx="2" /><circle cx="12" cy="5" r="3" /><path d="M12 8v3" /><circle cx="8" cy="15" r="1" /><circle cx="16" cy="15" r="1" /></>
+  ),
 };
 
 export function Icon({ name, size = 20, style }) {
