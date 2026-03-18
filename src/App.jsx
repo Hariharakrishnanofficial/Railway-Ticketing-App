@@ -44,6 +44,7 @@ import ChangePasswordPage from './pages/ChangePasswordPage';
 import AIChatWidget from './components/AIChatWidget';
 import PassengerExplorerPage from './pages/PassengerExplorerPage';
 import MCPChatPage from './pages/MCPChatPage';
+import AITestAgent from './pages/AITestAgent';
 
 // ─── Role helper ────────────────────────────────────────
 export function isAdmin(user) {
@@ -138,6 +139,7 @@ function AppCore() {
                   <Route path="/admin-logs" element={<AdminLogsPage />} />
                   <Route path="/zoho-explorer" element={<ZohoExplorerPage />} />
                   <Route path="/mcp-chat" element={<MCPChatPage user={user} />} />
+                  <Route path="/ai-test" element={<AITestAgent />} />
                   <Route path="*" element={<Navigate to="/admin" />} />
                 </Routes>
               </AdminLayout>
@@ -155,6 +157,7 @@ function AppCore() {
                   <Route path="/change-password" element={<ChangePasswordPage />} />
                   <Route path="/ai-assistant" element={<PassengerExplorerPage user={user} />} />
                   <Route path="/mcp-chat" element={<MCPChatPage user={user} />} />
+                  <Route path="/ai-test" element={<AITestAgent />} />
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
               </PassengerLayout>

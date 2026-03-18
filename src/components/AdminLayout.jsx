@@ -27,6 +27,7 @@ const ADMIN_NAV = [
   { path: '/admin-logs',   label: 'Admin Logs',    icon: 'shield'   },
   { path: '/zoho-explorer',label: 'Zoho Explorer', icon: 'settings' },
   { path: '/mcp-chat',    label: 'MCP Chat',      icon: 'search'   },
+  { path: '/ai-test',     label: 'AI Test Agent', icon: 'alert'    },
 ];
 
 const ACCENT = {
@@ -45,6 +46,7 @@ const ACCENT = {
   '/admin-logs':   '#ef4444',
   '/zoho-explorer': '#60a5fa',
   '/mcp-chat':      '#06b6d4',
+  '/ai-test':       '#f59e0b',
 };
 
 function Breadcrumb() {
@@ -56,7 +58,7 @@ function Breadcrumb() {
     bookings: 'Bookings', fares: 'Fares',
     settings: 'Settings', overview: 'Overview',
     inventory: 'Inventory', 'admin-logs': 'Admin Logs',
-    'mcp-chat': 'MCP Chat',
+    'mcp-chat': 'MCP Chat', 'ai-test': 'AI Test Agent',
   };
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>

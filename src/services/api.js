@@ -9,11 +9,9 @@ import axios from 'axios';
 //
 // PRODUCTION / CATALYST DEPLOY:
 //   Set VITE_API_BASE_URL to the full backend URL in your build environment.
-//   e.g. https://railway-ticketing-system-50039510865.development.catalystappsail.in/api/
-//
-// DO NOT use window.location.origin as a fallback — in local dev that resolves
-// to http://localhost:<vite-port>/api/ which is the frontend, not the backend.
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/';
+//   Fallback points to the deployed Catalyst AppSail backend.
+const DEPLOYED_BACKEND = 'https://railway-ticketing-system-50039510865.development.catalystappsail.in/api/';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || DEPLOYED_BACKEND;
 
 // ─── Role helpers ─────────────────────────────────────────────────────────────
 
@@ -562,10 +560,15 @@ export const aiApi = {
     client.post('/ai/search', { query }),
   agent: (message, history = [], userRole = 'User') =>
     client.post('/ai/agent', { message, history, user_role: userRole }),
-  // Multi-turn booking assistant conversation
-  chat: (message, history = []) =>
-    client.post('/ai/chat', { message, history }),
-  
+  // Multi-turn booking assistant conversation with state management
+  chat: (message, history = [], bookingState = null, userId = null) =>
+    client.post('/ai/chat', {
+      message,
+      history,
+      booking_state: bookingState,
+      user_id: userId
+    }),
+
   // Qwen chat (via DashScope proxy) — longer timeout for LLM responses
   qwen: (payload) =>
     client.post('/ai/qwen', payload, { timeout: 120000 }),

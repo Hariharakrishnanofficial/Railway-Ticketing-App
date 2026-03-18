@@ -29,11 +29,10 @@ const T = {
 };
 
 const QUICK_ACTIONS = [
+  { icon: '🎫', label: 'Book train' },
   { icon: '🚂', label: 'Search trains' },
-  { icon: '🎫', label: 'Book tickets' },
-  { icon: '📋', label: 'PNR status' },
+  { icon: '📋', label: 'Check PNR' },
   { icon: '❌', label: 'Cancel booking' },
-  { icon: '📊', label: 'Seat availability' },
 ];
 
 const CSS = `
@@ -130,11 +129,12 @@ export default function AIChatWidget() {
     time: new Date(),
   }];
 
-  const [open,       setOpen]       = useState(false);
-  const [messages,   setMessages]   = useState(INITIAL);
-  const [input,      setInput]      = useState('');
-  const [loading,    setLoading]    = useState(false);
-  const [unread,     setUnread]     = useState(0);   // notification dot count
+  const [open,         setOpen]         = useState(false);
+  const [messages,     setMessages]     = useState(INITIAL);
+  const [input,        setInput]        = useState('');
+  const [loading,      setLoading]      = useState(false);
+  const [unread,       setUnread]       = useState(0);   // notification dot count
+  const [bookingState, setBookingState] = useState(null); // Booking conversation state
   const bottomRef  = useRef(null);
   const inputRef   = useRef(null);
   const panelId    = 'ai-chat-panel';
@@ -150,7 +150,10 @@ export default function AIChatWidget() {
     return () => window.removeEventListener('keydown', h);
   }, []);
 
-  const clearChat = () => setMessages(INITIAL);
+  const clearChat = () => {
+    setMessages(INITIAL);
+    setBookingState(null); // Reset booking state on clear
+  };
 
   const sendMessage = useCallback(async (text) => {
     const msg = (text || input).trim();
@@ -160,15 +163,28 @@ export default function AIChatWidget() {
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
     const history = messages.map(m => ({ role: m.role, content: m.content }));
+
     try {
-      const res   = await aiApi.agent(msg, history, getCurrentUser()?.Role || 'User');
-      const reply = res?.response?.message || res?.response || 'Sorry, I could not process that.';
-      const action = res?.response?.action;
-      const data   = res?.response?.data || {};
-      let content  = typeof reply === 'string' ? reply : JSON.stringify(reply, null, 2);
-      if (action === 'confirm_booking' && data.source && data.destination) {
-        content += `\n\n✅ Ready to book: ${data.source} → ${data.destination} | ${data.date} | ${data.class || 'SL'} | ${data.passengers || 1} pax\n\nShall I proceed?`;
+      // Use the new conversational booking API with state management
+      const currentUser = getCurrentUser();
+      const res = await aiApi.chat(msg, history, bookingState, currentUser?.ID);
+
+      // Extract reply and updated booking state
+      const reply = res?.reply || res?.response?.message || res?.response || 'Sorry, I could not process that.';
+      const newBookingState = res?.booking_state || null;
+      const trigger = res?.trigger;
+
+      // Update booking state
+      if (newBookingState) {
+        setBookingState(newBookingState);
       }
+
+      // Clear booking state if booking is complete or cancelled
+      if (trigger === 'booking_complete' || trigger === 'cancelled') {
+        setBookingState(null);
+      }
+
+      let content = typeof reply === 'string' ? reply : JSON.stringify(reply, null, 2);
       const botMsg = { role: 'assistant', content, time: new Date() };
       setMessages(prev => [...prev, botMsg]);
       if (!open) setUnread(n => n + 1);
@@ -178,7 +194,7 @@ export default function AIChatWidget() {
         time: new Date(), error: true,
       }]);
     } finally { setLoading(false); }
-  }, [input, messages, loading, open]);
+  }, [input, messages, loading, open, bookingState]);
 
   const onKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -254,7 +270,7 @@ export default function AIChatWidget() {
               <div style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>Railway AI Assistant</div>
               <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, display: 'flex', alignItems: 'center', gap: 5 }}>
                 <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#4ade80', display: 'inline-block' }} />
-                Online · Powered by Gemini
+                Online · Powered by Qwen
               </div>
             </div>
             {/* Clear chat */}

@@ -309,7 +309,7 @@ export default function MCPChatPage({ user }) {
   const getInitialMessage = () => ({
     id: 0,
     role: "assistant",
-    content: `**Welcome to Railway MCP Query Assistant**\n\nI convert your natural language queries into structured database queries and fetch **real data** from Zoho Creator.\n\nTry asking:\n- **"Show all stations"**\n- **"Find trains from Chennai to Mumbai"**\n- **"Check booking PNR PNRX7K2P9W1"**\n- **"Show train 12627"**\n\nUse the quick actions below or type your query!`,
+    content: `**Welcome to Railway MCP Query Assistant**\n\nI convert your natural language queries into structured database queries and fetch **real data** from Zoho Creator.\n\nTry asking:\n- **"Show all stations"**\n- **"Find trains from Chennai to Mumbai"**\n- **"Check booking PNR 12345678"**\n- **"Show train 12627"**\n\nUse the quick actions below or type your query!`,
   });
 
   const [messages, setMessages] = useState([getInitialMessage()]);
@@ -466,7 +466,6 @@ export default function MCPChatPage({ user }) {
           }}>{"\u{1F4BE}"}</div>
           <div>
             <div style={{ fontWeight: 700, fontSize: 16, letterSpacing: 0.5, color: "#06b6d4" }}>MCP Query Assistant</div>
-            <div style={{ fontSize: 11, color: "var(--text-muted)", letterSpacing: 0.3 }}>Zoho Creator \u00B7 Live Database \u00B7 Qwen</div>
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
