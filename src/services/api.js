@@ -10,7 +10,7 @@ import axios from 'axios';
 // PRODUCTION / CATALYST DEPLOY:
 //   Set VITE_API_BASE_URL to the full backend URL in your build environment.
 //   Fallback points to the deployed Catalyst AppSail backend.
-const DEPLOYED_BACKEND = 'https://railway-ticketing-system-50039510865.development.catalystappsail.in/api/';
+const DEPLOYED_BACKEND = 'https://railway-project-backend-50039510865.development.catalystappsail.in/api/';
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || DEPLOYED_BACKEND;
 
 // ─── Role helpers ─────────────────────────────────────────────────────────────
